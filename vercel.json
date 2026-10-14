@@ -1,7 +1,10 @@
 {
+  "buildCommand": "",
+  "outputDirectory": ".",
+  "framework": null,
   "rewrites": [
     { "source": "/api/trpc/:path*", "destination": "/api/trpc/:path*" },
-    { "source": "/((?!api|assets|manus-storage|favicon).*)", "destination": "/index.html" }
+    { "source": "/:path((?!api|assets|manus-storage).*)", "destination": "/index.html" }
   ],
   "headers": [
     {
