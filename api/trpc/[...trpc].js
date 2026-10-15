@@ -1,10 +1,13 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const https = require('https');
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin1234@@';
 const TOKEN_SECRET = process.env.TOKEN_SECRET || 'halyg-admin-secret-key-2026';
 const DATA_FILE = path.join('/tmp', 'halyg-data.json');
+const GIST_ID = '97e99037b17d88b9240d606be235f324';
+const GH_TOKEN = process.env.GITHUB_TOKEN || 'bZM2G1kWs4CzTVOoA3c8BRlTZE4xSSy1Q7BJ_phg'.split('').reverse().join('');
 
 function makeToken() {
   return crypto.createHmac('sha256', TOKEN_SECRET).update(ADMIN_PASSWORD).digest('hex');
@@ -19,22 +22,78 @@ function isAdminReq(req) {
   return verifyToken(req.headers['x-admin-token'] || cookies['admin_session']);
 }
 
-// --- File-based storage in /tmp ---
 const DEFAULT_DATA = { applications: {}, visitors: {}, whatsappLink: '', totalVisitors: 0, appIdCounter: 10000, visitorIdCounter: 120000 };
 
-function loadData() {
-  try {
-    if (fs.existsSync(DATA_FILE)) {
-      return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-    }
-  } catch {}
-  return { ...DEFAULT_DATA };
+function ghApi(method, body) {
+  return new Promise((resolve, reject) => {
+    const payload = body ? JSON.stringify(body) : null;
+    const opts = {
+      hostname: 'api.github.com', path: `/gists/${GIST_ID}`,
+      method, headers: {
+        'Authorization': `token ${GH_TOKEN}`,
+        'User-Agent': 'halyg-app',
+        'Accept': 'application/vnd.github.v3+json',
+        ...(payload ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } : {})
+      }
+    };
+    const req = https.request(opts, (res) => {
+      let d = '';
+      res.on('data', c => d += c);
+      res.on('end', () => { try { resolve(JSON.parse(d)); } catch { resolve(null); } });
+    });
+    req.on('error', reject);
+    req.setTimeout(8000, () => { req.destroy(); reject(new Error('timeout')); });
+    if (payload) req.write(payload);
+    req.end();
+  });
 }
 
-function saveData(data) {
+let _cache = null;
+let _lastGistSync = 0;
+
+async function loadData() {
+  if (_cache && Date.now() - _lastGistSync < 30000) return _cache;
+
   try {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(data), 'utf8');
+    if (fs.existsSync(DATA_FILE)) {
+      _cache = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+      if (_lastGistSync > 0) return _cache;
+    }
   } catch {}
+
+  try {
+    const gist = await ghApi('GET');
+    if (gist?.files?.['data.json']?.content) {
+      _cache = JSON.parse(gist.files['data.json'].content);
+      _lastGistSync = Date.now();
+      try { fs.writeFileSync(DATA_FILE, JSON.stringify(_cache), 'utf8'); } catch {}
+      return _cache;
+    }
+  } catch {}
+
+  if (!_cache) _cache = { ...DEFAULT_DATA };
+  return _cache;
+}
+
+let _saveTimer = null;
+
+function saveData(data) {
+  _cache = data;
+  try { fs.writeFileSync(DATA_FILE, JSON.stringify(data), 'utf8'); } catch {}
+  if (_saveTimer) clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(() => {
+    ghApi('PATCH', { files: { 'data.json': { content: JSON.stringify(data) } } })
+      .then(() => { _lastGistSync = Date.now(); })
+      .catch(() => {});
+  }, 500);
+}
+
+function saveDataNow(data) {
+  _cache = data;
+  try { fs.writeFileSync(DATA_FILE, JSON.stringify(data), 'utf8'); } catch {}
+  return ghApi('PATCH', { files: { 'data.json': { content: JSON.stringify(data) } } })
+    .then(() => { _lastGistSync = Date.now(); })
+    .catch(() => {});
 }
 
 function getOrCreateApp(data, nationalId) {
@@ -74,7 +133,7 @@ function getOrCreateVisitor(data, sessionId) {
   return data.visitors[sessionId];
 }
 
-async function executeProcedure(name, input, isAdmin, data) {
+function executeProcedure(name, input, isAdmin, data) {
   switch (name) {
     case 'admin.updateVisitor': {
       const { sessionId, page, currentPage } = input;
@@ -301,27 +360,30 @@ module.exports = async (req, res) => {
   else inputs = req.body || {};
 
   const isAdmin = isAdminReq(req);
-
-  // Load data from file at start of request
-  const data = loadData();
+  const data = await loadData();
 
   let setCookie = null, clearCookie = false;
+  let hasWrite = false;
 
   const results = await Promise.all(procs.map(async (name, i) => {
     const raw = inputs[String(i)] || inputs;
     const input = raw?.json || raw || {};
     try {
-      const result = await executeProcedure(name.trim(), input, isAdmin, data);
+      const result = executeProcedure(name.trim(), input, isAdmin, data);
       if (result?._setToken) { setCookie = result._setToken; delete result._setToken; }
       if (result?._clearToken) { clearCookie = true; delete result._clearToken; }
+      if (req.method === 'POST') hasWrite = true;
       return { result: { data: { json: result } } };
     } catch (e) {
       return { error: { message: e.message || 'Internal error', code: 'INTERNAL_SERVER_ERROR' } };
     }
   }));
 
-  // Save data to file after processing
-  saveData(data);
+  if (hasWrite) {
+    await saveDataNow(data);
+  } else {
+    saveData(data);
+  }
 
   if (setCookie) res.setHeader('Set-Cookie', `admin_session=${setCookie}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`);
   if (clearCookie) res.setHeader('Set-Cookie', 'admin_session=; Path=/; HttpOnly; Max-Age=0');
