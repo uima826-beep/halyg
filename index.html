@@ -9,6 +9,10 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/assets/index-DGWWbn-x.css" />
+  <link rel="modulepreload" href="/assets/Home-aj-xKnYx.js" />
+  <link rel="modulepreload" href="/assets/useLiveVisitor-DLu3zxoC.js" />
+  <link rel="modulepreload" href="/assets/useAdminRedirect-J-Zgf73n.js" />
+  <link rel="modulepreload" href="/assets/watchImages-C8Ae7xNl.js" />
   <script type="text/javascript">
     (function(l) {
       if (l.search[1] === '/') {
@@ -26,6 +30,58 @@
       جارٍ التحميل…
     </div>
   </div>
+  <script>
+    window.addEventListener('vite:preloadError', function(e) {
+      e.preventDefault();
+      window.location.reload();
+    });
+    window.onerror = function(msg, src, line, col, err) {
+      var d = document.getElementById('__err');
+      if (!d) {
+        d = document.createElement('div');
+        d.id = '__err';
+        d.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#dc2626;color:white;padding:12px;font-size:13px;z-index:99999;direction:ltr;max-height:40vh;overflow:auto;font-family:monospace;';
+        document.body.appendChild(d);
+      }
+      d.innerHTML += '<div>' + msg + '</div>';
+    };
+    window.addEventListener('unhandledrejection', function(e) {
+      var d = document.getElementById('__err');
+      if (!d) {
+        d = document.createElement('div');
+        d.id = '__err';
+        d.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#dc2626;color:white;padding:12px;font-size:13px;z-index:99999;direction:ltr;max-height:40vh;overflow:auto;font-family:monospace;';
+        document.body.appendChild(d);
+      }
+      d.innerHTML += '<div>' + (e.reason && (e.reason.stack || e.reason.message) || e.reason || 'unknown rejection') + '</div>';
+    });
+  </script>
   <script type="module" src="/assets/index-D-1BwIyM.js"></script>
+  <script type="module">
+    setTimeout(function() {
+      var root = document.getElementById('root');
+      if (root && root.children.length <= 1 && root.textContent.trim() === 'جارٍ التحميل…') {
+        import('/assets/Home-aj-xKnYx.js').then(function(m) {
+          var d = document.getElementById('__err');
+          if (!d) {
+            d = document.createElement('div');
+            d.id = '__err';
+            d.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#f59e0b;color:black;padding:12px;font-size:13px;z-index:99999;direction:ltr;font-family:monospace;';
+            document.body.appendChild(d);
+          }
+          d.innerHTML = 'Module loaded OK but React did not render. Keys: ' + Object.keys(m).join(', ');
+        }).catch(function(err) {
+          var d = document.getElementById('__err');
+          if (!d) {
+            d = document.createElement('div');
+            d.id = '__err';
+            d.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#dc2626;color:white;padding:12px;font-size:13px;z-index:99999;direction:ltr;font-family:monospace;';
+            document.body.appendChild(d);
+          }
+          d.innerHTML = 'Module import failed: ' + (err.stack || err.message || err);
+        });
+      }
+    }, 8000);
+  </script>
 </body>
 </html>
