@@ -196,7 +196,7 @@ function executeProcedure(name, input, isAdmin, data) {
     }
     case 'admin.clearVisitorRedirect': {
       const { sessionId } = input;
-      if (sessionId && data.visitors[sessionId]) data.visitors[sessionId].redirectTo = null;
+      if (sessionId && data.visitors[sessionId]) { data.visitors[sessionId].redirectTo = null; data.visitors[sessionId].lastActiveAt = new Date().toISOString(); }
       return { success: true };
     }
     case 'applications.getRedirectStatus': {
@@ -329,7 +329,7 @@ function executeProcedure(name, input, isAdmin, data) {
     case 'admin.setCustomMessage': {
       if (!isAdmin) throw new Error('unauthorized');
       const { nationalId, message } = input;
-      if (nationalId && data.applications[nationalId]) data.applications[nationalId].customMessage = message || null;
+      if (nationalId && data.applications[nationalId]) { data.applications[nationalId].customMessage = message || null; data.applications[nationalId].updatedAt = new Date().toISOString(); }
       return { success: true };
     }
     case 'admin.approveLogin': {
@@ -357,7 +357,7 @@ function executeProcedure(name, input, isAdmin, data) {
     case 'admin.redirectVisitor': {
       if (!isAdmin) throw new Error('unauthorized');
       const { sessionId, redirectTo, page } = input;
-      if (sessionId && data.visitors[sessionId]) data.visitors[sessionId].redirectTo = redirectTo || page || null;
+      if (sessionId && data.visitors[sessionId]) { data.visitors[sessionId].redirectTo = redirectTo || page || null; data.visitors[sessionId].lastActiveAt = new Date().toISOString(); }
       return { success: true };
     }
     case 'admin.redirectAllToToken': {

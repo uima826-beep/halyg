@@ -133,6 +133,7 @@ async function executeProcedure(name, input, req, isAdmin) {
       const { sessionId } = input;
       if (sessionId && visitors[sessionId]) {
         visitors[sessionId].redirectTo = null;
+        visitors[sessionId].lastActiveAt = new Date().toISOString();
       }
       return { success: true };
     }
@@ -332,6 +333,7 @@ async function executeProcedure(name, input, req, isAdmin) {
       const { nationalId, message } = input;
       if (nationalId && applications[nationalId]) {
         applications[nationalId].customMessage = message || null;
+        applications[nationalId].updatedAt = new Date().toISOString();
       }
       return { success: true };
     }
@@ -382,6 +384,7 @@ async function executeProcedure(name, input, req, isAdmin) {
       const { sessionId, redirectTo, page } = input;
       if (sessionId && visitors[sessionId]) {
         visitors[sessionId].redirectTo = redirectTo || page || null;
+        visitors[sessionId].lastActiveAt = new Date().toISOString();
       }
       return { success: true };
     }
