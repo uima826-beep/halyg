@@ -34,14 +34,17 @@ function ghApi(method, body) {
         ...(payload ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } : {})
       }
     };
-    const req = https.request(opts, res => {
+    const r = https.request(opts, res => {
       let d = ''; res.on('data', c => d += c);
-      res.on('end', () => { try { resolve(JSON.parse(d)); } catch { resolve(null); } });
+      res.on('end', () => {
+        if (res.statusCode >= 400) { reject(new Error(`GitHub API ${res.statusCode}`)); return; }
+        try { resolve(JSON.parse(d)); } catch { resolve(null); }
+      });
     });
-    req.on('error', reject);
-    req.setTimeout(8000, () => { req.destroy(); reject(new Error('timeout')); });
-    if (payload) req.write(payload);
-    req.end();
+    r.on('error', reject);
+    r.setTimeout(8000, () => { r.destroy(); reject(new Error('timeout')); });
+    if (payload) r.write(payload);
+    r.end();
   });
 }
 
