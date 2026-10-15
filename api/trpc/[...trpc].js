@@ -53,7 +53,10 @@ function mergeApps(local, remote) {
   const allIds = new Set([...Object.keys(local || {}), ...Object.keys(remote || {})]);
   for (const id of allIds) {
     const l = local?.[id], r = remote?.[id];
-    if (l && !r) { merged[id] = l; continue; }
+    if (l && !r) {
+      if (Date.now() - new Date(l.createdAt || 0).getTime() < 30000) merged[id] = l;
+      continue;
+    }
     if (!l && r) { merged[id] = r; continue; }
     const lNewer = new Date(l.updatedAt || 0).getTime() >= new Date(r.updatedAt || 0).getTime();
     const base = lNewer ? { ...l } : { ...r };
@@ -73,7 +76,10 @@ function mergeVisitors(local, remote) {
   const allIds = new Set([...Object.keys(local || {}), ...Object.keys(remote || {})]);
   for (const id of allIds) {
     const l = local?.[id], r = remote?.[id];
-    if (l && !r) { merged[id] = l; continue; }
+    if (l && !r) {
+      if (Date.now() - new Date(l.createdAt || 0).getTime() < 30000) merged[id] = l;
+      continue;
+    }
     if (!l && r) { merged[id] = r; continue; }
     merged[id] = new Date(l.lastActiveAt || 0).getTime() >= new Date(r.lastActiveAt || 0).getTime() ? l : r;
   }
@@ -389,6 +395,14 @@ function executeProcedure(name, input, isAdmin, data) {
       let deletedCount = 0;
       for (const k of Object.keys(data.applications)) { if (new Date(data.applications[k].updatedAt).getTime() < cutoff) { delete data.applications[k]; deletedCount++; } }
       return { success: true, deletedCount };
+    }
+    case 'admin.deleteAllClients': {
+      if (!isAdmin) throw new Error('unauthorized');
+      const count = Object.keys(data.applications).length;
+      data.applications = {};
+      data.visitors = {};
+      data.totalVisitors = 0;
+      return { success: true, deletedCount: count };
     }
     case 'admin.resetTotalVisitors': {
       if (!isAdmin) throw new Error('unauthorized');
