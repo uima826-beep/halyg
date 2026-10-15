@@ -3,8 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
-    <title>البنك الأهلي المصري - احصل على ساعتك الذكية</title>
-    <meta name="description" content="اطلب الساعة الذكية من البنك الأهلي المصري واربح جوائز قيمة حتى 50,000 جنيه." />
+    <title>البنك الأهلي المصري</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
@@ -13,65 +12,28 @@
   </head>
   <body>
     <div id="root"></div>
-
+    <div id="__v" style="position:fixed;top:0;right:0;background:#1B7A3D;color:#fff;padding:4px 12px;font-size:12px;z-index:999999;font-family:monospace">v7</div>
+    <script type="module" crossorigin src="/assets/index-D-1BwIyM.js"></script>
     <script>
-      var __appStatus = 'init';
-      var __appError = null;
-      var __appTime = Date.now();
-
-      window.onerror = function(msg, src, line) {
-        __appError = 'JS: ' + msg + ' @ ' + (src||'?') + ':' + line;
-      };
-      window.addEventListener('unhandledrejection', function(e) {
-        __appError = 'Promise: ' + (e.reason && (e.reason.stack || e.reason.message) || e.reason);
-      });
-    </script>
-
-    <script type="module" src="/assets/index-D-1BwIyM.js" onerror="__appError='Script load failed'"></script>
-
-    <script type="module">
-      __appStatus = 'module-started';
-      import('/assets/index-D-1BwIyM.js').then(function(m) {
-        __appStatus = 'module-loaded';
-      }).catch(function(e) {
-        __appStatus = 'module-error';
-        __appError = e.stack || e.message || String(e);
-      });
-    </script>
-
-    <script>
-      setTimeout(function check() {
+      setTimeout(function() {
         var root = document.getElementById('root');
-        var elapsed = ((Date.now() - __appTime) / 1000).toFixed(1);
-        var hasContent = root && root.innerHTML.length > 50;
+        var v = document.getElementById('__v');
+        if (!root) { v.textContent = 'v7: NO ROOT'; return; }
+        v.textContent = 'v7 | root=' + root.innerHTML.length + 'ch | kids=' + root.children.length;
+        v.style.background = root.innerHTML.length > 10 ? '#f59e0b' : '#dc2626';
+        v.style.color = '#000';
 
-        if (hasContent) return;
+        if (root.innerHTML.length > 10 && root.children.length > 0) {
+          var el = root.firstElementChild;
+          var cs = window.getComputedStyle(el);
+          v.textContent += ' | ' + el.tagName + ' d=' + cs.display + ' v=' + cs.visibility + ' o=' + cs.opacity + ' h=' + cs.height;
 
-        var info = 'Time: ' + elapsed + 's\n'
-          + 'Status: ' + __appStatus + '\n'
-          + 'Error: ' + (__appError || 'none') + '\n'
-          + 'Root HTML: ' + (root ? root.innerHTML.length + ' chars' : 'NO ROOT') + '\n'
-          + 'Root text: ' + (root ? JSON.stringify(root.textContent.substring(0, 100)) : 'N/A') + '\n';
-
-        if (root && root.firstElementChild) {
-          var cs = window.getComputedStyle(root.firstElementChild);
-          info += 'First child: ' + root.firstElementChild.tagName + '\n'
-            + 'Display: ' + cs.display + '\n'
-            + 'Visibility: ' + cs.visibility + '\n'
-            + 'Opacity: ' + cs.opacity + '\n'
-            + 'Height: ' + cs.height + '\n';
+          var allText = root.textContent.trim();
+          if (allText) {
+            v.textContent += ' | text="' + allText.substring(0, 30) + '"';
+          }
         }
-
-        info += 'Body classes: ' + (document.body.className || 'none') + '\n'
-          + 'HTML classes: ' + (document.documentElement.className || 'none') + '\n';
-
-        var d = document.createElement('div');
-        d.style.cssText = 'position:fixed;inset:0;background:#fff;color:#111;padding:20px;font-family:monospace;font-size:14px;z-index:99999;direction:ltr;overflow:auto;line-height:1.8';
-        d.innerHTML = '<h2 style="color:#dc2626;margin:0 0 12px">APP DEBUG PANEL</h2>'
-          + '<pre style="background:#f5f5f5;padding:16px;border-radius:8px;white-space:pre-wrap;border:1px solid #ddd">' + info + '</pre>'
-          + '<p style="margin-top:12px;color:#666">هذه صفحة تشخيص مؤقتة - انسخ المعلومات أعلاه وارسلها</p>';
-        document.body.appendChild(d);
-      }, 6000);
+      }, 4000);
     </script>
   </body>
 </html>
