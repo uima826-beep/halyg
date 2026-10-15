@@ -174,10 +174,9 @@ async function executeProcedure(name, input, req, isAdmin) {
 
     case 'applications.updatePage': {
       const { nationalId, page } = input;
-      if (nationalId) {
-        const app = getOrCreateApp(nationalId);
-        app.currentPage = page || app.currentPage;
-        app.updatedAt = new Date().toISOString();
+      if (nationalId && data.applications[nationalId]) {
+        data.applications[nationalId].currentPage = page || data.applications[nationalId].currentPage;
+        data.applications[nationalId].updatedAt = new Date().toISOString();
       }
       return { success: true };
     }

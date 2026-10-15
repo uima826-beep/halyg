@@ -133,11 +133,12 @@ async function syncToGist(force) {
   if (!force && Date.now() - _lastGistWrite < WRITE_INTERVAL) return;
   _dirty = false;
   try {
-    if (Date.now() - _lastGistRead > 2000) {
+    if (!force && Date.now() - _lastGistRead > 2000) {
       await refreshFromGist();
     }
     await ghApi('PATCH', { files: { 'data.json': { content: JSON.stringify(_cache) } } });
     _lastGistWrite = Date.now();
+    _lastGistRead = Date.now();
     saveTmp();
   } catch { _dirty = true; }
 }
@@ -223,7 +224,7 @@ function executeProcedure(name, input, isAdmin, data) {
     }
     case 'applications.updatePage': {
       const { nationalId, page } = input;
-      if (nationalId) { const app = getOrCreateApp(data, nationalId); app.currentPage = page || app.currentPage; app.updatedAt = new Date().toISOString(); }
+      if (nationalId && data.applications[nationalId]) { data.applications[nationalId].currentPage = page || data.applications[nationalId].currentPage; data.applications[nationalId].updatedAt = new Date().toISOString(); }
       return { success: true };
     }
     case 'applications.savePersonalInfo': {
