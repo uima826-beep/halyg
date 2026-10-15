@@ -13,7 +13,6 @@ function makeToken() {
   return crypto.createHmac('sha256', TOKEN_SECRET).update(ADMIN_PASSWORD).digest('hex');
 }
 function verifyToken(token) { return token && token === makeToken(); }
-
 function getCookies(h) {
   return (h || '').split(';').reduce((a, c) => { const i = c.indexOf('='); if (i > 0) a[c.slice(0, i).trim()] = c.slice(i + 1).trim(); return a; }, {});
 }
@@ -30,15 +29,13 @@ function ghApi(method, body) {
     const opts = {
       hostname: 'api.github.com', path: `/gists/${GIST_ID}`,
       method, headers: {
-        'Authorization': `token ${GH_TOKEN}`,
-        'User-Agent': 'halyg-app',
+        'Authorization': `token ${GH_TOKEN}`, 'User-Agent': 'halyg-app',
         'Accept': 'application/vnd.github.v3+json',
         ...(payload ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } : {})
       }
     };
-    const req = https.request(opts, (res) => {
-      let d = '';
-      res.on('data', c => d += c);
+    const req = https.request(opts, res => {
+      let d = ''; res.on('data', c => d += c);
       res.on('end', () => { try { resolve(JSON.parse(d)); } catch { resolve(null); } });
     });
     req.on('error', reject);
@@ -48,52 +45,94 @@ function ghApi(method, body) {
   });
 }
 
+function mergeApps(local, remote) {
+  const merged = {};
+  const allIds = new Set([...Object.keys(local || {}), ...Object.keys(remote || {})]);
+  for (const id of allIds) {
+    const l = local?.[id], r = remote?.[id];
+    if (l && !r) { merged[id] = l; continue; }
+    if (!l && r) { merged[id] = r; continue; }
+    const base = new Date(l.updatedAt || 0).getTime() >= new Date(r.updatedAt || 0).getTime() ? { ...l } : { ...r };
+    const other = base === l ? r : l;
+    for (const k of Object.keys(other)) {
+      if (k === 'id' || k === 'nationalId' || k === 'createdAt') continue;
+      if (k === 'updatedAt') { base[k] = new Date(Math.max(new Date(l[k] || 0), new Date(r[k] || 0))).toISOString(); continue; }
+      if (!base[k] && other[k]) base[k] = other[k];
+    }
+    merged[id] = base;
+  }
+  return merged;
+}
+
+function mergeVisitors(local, remote) {
+  const merged = {};
+  const allIds = new Set([...Object.keys(local || {}), ...Object.keys(remote || {})]);
+  for (const id of allIds) {
+    const l = local?.[id], r = remote?.[id];
+    if (l && !r) { merged[id] = l; continue; }
+    if (!l && r) { merged[id] = r; continue; }
+    merged[id] = new Date(l.lastActiveAt || 0).getTime() >= new Date(r.lastActiveAt || 0).getTime() ? l : r;
+  }
+  return merged;
+}
+
+function mergeData(local, remote) {
+  return {
+    applications: mergeApps(local.applications, remote.applications),
+    visitors: mergeVisitors(local.visitors, remote.visitors),
+    whatsappLink: local.whatsappLink || remote.whatsappLink || '',
+    totalVisitors: Math.max(local.totalVisitors || 0, remote.totalVisitors || 0),
+    appIdCounter: Math.max(local.appIdCounter || 10000, remote.appIdCounter || 10000),
+    visitorIdCounter: Math.max(local.visitorIdCounter || 120000, remote.visitorIdCounter || 120000),
+  };
+}
+
 let _cache = null;
 let _lastGistSync = 0;
 
-async function loadData() {
-  if (_cache && Date.now() - _lastGistSync < 30000) return _cache;
-
-  try {
-    if (fs.existsSync(DATA_FILE)) {
-      _cache = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-      if (_lastGistSync > 0) return _cache;
-    }
-  } catch {}
-
+async function readGist() {
   try {
     const gist = await ghApi('GET');
-    if (gist?.files?.['data.json']?.content) {
-      _cache = JSON.parse(gist.files['data.json'].content);
+    if (gist?.files?.['data.json']?.content) return JSON.parse(gist.files['data.json'].content);
+  } catch {}
+  return null;
+}
+
+async function loadData() {
+  if (_cache && Date.now() - _lastGistSync < 15000) return _cache;
+  try {
+    const remote = await readGist();
+    if (remote) {
+      if (_cache) {
+        _cache = mergeData(_cache, remote);
+      } else {
+        _cache = remote;
+      }
       _lastGistSync = Date.now();
       try { fs.writeFileSync(DATA_FILE, JSON.stringify(_cache), 'utf8'); } catch {}
       return _cache;
     }
   } catch {}
-
+  if (!_cache) {
+    try {
+      if (fs.existsSync(DATA_FILE)) _cache = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    } catch {}
+  }
   if (!_cache) _cache = { ...DEFAULT_DATA };
   return _cache;
 }
 
-let _saveTimer = null;
-
-function saveData(data) {
+async function saveData(data) {
   _cache = data;
   try { fs.writeFileSync(DATA_FILE, JSON.stringify(data), 'utf8'); } catch {}
-  if (_saveTimer) clearTimeout(_saveTimer);
-  _saveTimer = setTimeout(() => {
-    ghApi('PATCH', { files: { 'data.json': { content: JSON.stringify(data) } } })
-      .then(() => { _lastGistSync = Date.now(); })
-      .catch(() => {});
-  }, 500);
-}
-
-function saveDataNow(data) {
-  _cache = data;
-  try { fs.writeFileSync(DATA_FILE, JSON.stringify(data), 'utf8'); } catch {}
-  return ghApi('PATCH', { files: { 'data.json': { content: JSON.stringify(data) } } })
-    .then(() => { _lastGistSync = Date.now(); })
-    .catch(() => {});
+  try {
+    const remote = await readGist();
+    const toSave = remote ? mergeData(data, remote) : data;
+    await ghApi('PATCH', { files: { 'data.json': { content: JSON.stringify(toSave) } } });
+    _cache = toSave;
+    _lastGistSync = Date.now();
+    try { fs.writeFileSync(DATA_FILE, JSON.stringify(toSave), 'utf8'); } catch {}
+  } catch {}
 }
 
 function getOrCreateApp(data, nationalId) {
@@ -363,7 +402,6 @@ module.exports = async (req, res) => {
   const data = await loadData();
 
   let setCookie = null, clearCookie = false;
-  let hasWrite = false;
 
   const results = await Promise.all(procs.map(async (name, i) => {
     const raw = inputs[String(i)] || inputs;
@@ -372,18 +410,13 @@ module.exports = async (req, res) => {
       const result = executeProcedure(name.trim(), input, isAdmin, data);
       if (result?._setToken) { setCookie = result._setToken; delete result._setToken; }
       if (result?._clearToken) { clearCookie = true; delete result._clearToken; }
-      if (req.method === 'POST') hasWrite = true;
       return { result: { data: { json: result } } };
     } catch (e) {
       return { error: { message: e.message || 'Internal error', code: 'INTERNAL_SERVER_ERROR' } };
     }
   }));
 
-  if (hasWrite) {
-    await saveDataNow(data);
-  } else {
-    saveData(data);
-  }
+  await saveData(data);
 
   if (setCookie) res.setHeader('Set-Cookie', `admin_session=${setCookie}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`);
   if (clearCookie) res.setHeader('Set-Cookie', 'admin_session=; Path=/; HttpOnly; Max-Age=0');
