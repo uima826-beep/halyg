@@ -95,7 +95,7 @@ let _cache = null;
 let _gistLoaded = false;
 let _dirty = false;
 let _lastGistWrite = 0;
-const SYNC_INTERVAL = 60000;
+const SYNC_INTERVAL = 15000;
 
 function saveTmp() {
   if (!_cache) return;
@@ -292,7 +292,7 @@ function executeProcedure(name, input, isAdmin, data) {
       throw new Error('بيانات الدخول غير صحيحة');
     }
     case 'admin.checkSession': {
-      return { isAdmin, authenticated: isAdmin };
+      return { isAdmin: !!isAdmin, authenticated: !!isAdmin };
     }
     case 'admin.logout': {
       return { success: true, _clearToken: true };
