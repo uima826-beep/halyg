@@ -2,16 +2,22 @@ const crypto = require('crypto');
 
 const applications = {};
 const visitors = {};
-const adminTokens = new Set();
 let visitorIdCounter = 120000;
 let appIdCounter = 10000;
 let totalVisitors = 0;
 let _whatsappLink = '';
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin1234@@';
+const TOKEN_SECRET = process.env.TOKEN_SECRET || 'halyg-admin-secret-key-2026';
 
 function makeToken() {
-  return crypto.randomBytes(24).toString('hex');
+  return crypto.createHmac('sha256', TOKEN_SECRET).update(ADMIN_PASSWORD).digest('hex');
+}
+
+function verifyToken(token) {
+  if (!token) return false;
+  const expected = makeToken();
+  return token === expected;
 }
 
 function getCookies(cookieHeader) {
@@ -26,7 +32,7 @@ function isAdminReq(req) {
   const cookies = getCookies(req.headers.cookie);
   const header = req.headers['x-admin-token'];
   const token = header || cookies['admin_session'];
-  return token && adminTokens.has(token);
+  return verifyToken(token);
 }
 
 function getOrCreateApp(nationalId) {
@@ -193,7 +199,6 @@ async function executeProcedure(name, input, isAdmin) {
       const { password } = input;
       if (password === ADMIN_PASSWORD) {
         const token = makeToken();
-        adminTokens.add(token);
         return { success: true, _setToken: token };
       }
       throw new Error('بيانات الدخول غير صحيحة');
@@ -351,13 +356,10 @@ module.exports = async (req, res) => {
       const data = await executeProcedure(name.trim(), input, isAdmin);
       if (data && data._setToken) {
         setCookie = data._setToken;
-        adminTokens.add(setCookie);
         delete data._setToken;
       }
       if (data && data._clearToken) {
         clearCookie = true;
-        const cookies = getCookies(req.headers.cookie);
-        if (cookies.admin_session) adminTokens.delete(cookies.admin_session);
         delete data._clearToken;
       }
       return { result: { data: { json: data } } };
