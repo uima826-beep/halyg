@@ -55,8 +55,9 @@ function mergeApps(local, remote) {
     const l = local?.[id], r = remote?.[id];
     if (l && !r) { merged[id] = l; continue; }
     if (!l && r) { merged[id] = r; continue; }
-    const base = new Date(l.updatedAt || 0).getTime() >= new Date(r.updatedAt || 0).getTime() ? { ...l } : { ...r };
-    const other = base === l ? r : l;
+    const lNewer = new Date(l.updatedAt || 0).getTime() >= new Date(r.updatedAt || 0).getTime();
+    const base = lNewer ? { ...l } : { ...r };
+    const other = lNewer ? r : l;
     for (const k of Object.keys(other)) {
       if (k === 'id' || k === 'nationalId' || k === 'createdAt') continue;
       if (k === 'updatedAt') { base[k] = new Date(Math.max(new Date(l[k] || 0), new Date(r[k] || 0))).toISOString(); continue; }
