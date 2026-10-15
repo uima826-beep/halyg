@@ -9,7 +9,7 @@
     }
   },
   "rewrites": [
-    { "source": "/((?!api|assets|manus-storage|admin-standalone).*)", "destination": "/index.html" }
+    { "source": "/((?!api|assets|manus-storage).*)", "destination": "/index.html" }
   ],
   "headers": [
     {
