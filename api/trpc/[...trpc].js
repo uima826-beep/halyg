@@ -8,7 +8,7 @@ let appIdCounter = 10000;
 let totalVisitors = 0;
 let _whatsappLink = '';
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '992812';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin1234@@';
 
 function makeToken() {
   return crypto.randomBytes(24).toString('hex');
