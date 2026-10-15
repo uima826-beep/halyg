@@ -92,49 +92,51 @@ function mergeData(local, remote) {
 }
 
 let _cache = null;
-let _gistLoaded = false;
 let _dirty = false;
 let _lastGistWrite = 0;
-const SYNC_INTERVAL = 15000;
+let _lastGistRead = 0;
+const WRITE_INTERVAL = 3000;
+const READ_INTERVAL = 4000;
 
 function saveTmp() {
   if (!_cache) return;
   try { fs.writeFileSync(DATA_FILE, JSON.stringify(_cache), 'utf8'); } catch {}
 }
 
-async function loadData() {
-  if (_cache) return _cache;
+async function refreshFromGist() {
   try {
-    if (fs.existsSync(DATA_FILE)) _cache = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    const gist = await ghApi('GET');
+    _lastGistRead = Date.now();
+    if (gist?.files?.['data.json']?.content) {
+      const remote = JSON.parse(gist.files['data.json'].content);
+      _cache = _cache ? mergeData(_cache, remote) : remote;
+      saveTmp();
+    }
   } catch {}
-  if (!_gistLoaded) {
-    _gistLoaded = true;
+}
+
+async function loadData() {
+  if (!_cache) {
     try {
-      const gist = await ghApi('GET');
-      if (gist?.files?.['data.json']?.content) {
-        const remote = JSON.parse(gist.files['data.json'].content);
-        _cache = _cache ? mergeData(_cache, remote) : remote;
-        saveTmp();
-      }
+      if (fs.existsSync(DATA_FILE)) _cache = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
     } catch {}
+  }
+  if (Date.now() - _lastGistRead > READ_INTERVAL) {
+    await refreshFromGist();
   }
   if (!_cache) _cache = { ...DEFAULT_DATA };
   return _cache;
 }
 
-async function maybeSyncToGist() {
+async function syncToGist() {
   if (!_dirty) return;
-  if (Date.now() - _lastGistWrite < SYNC_INTERVAL) return;
+  if (Date.now() - _lastGistWrite < WRITE_INTERVAL) return;
   _dirty = false;
   try {
-    const gist = await ghApi('GET');
-    let remote = null;
-    if (gist?.files?.['data.json']?.content) {
-      try { remote = JSON.parse(gist.files['data.json'].content); } catch {}
+    if (Date.now() - _lastGistRead > 2000) {
+      await refreshFromGist();
     }
-    const toSave = remote ? mergeData(_cache, remote) : _cache;
-    await ghApi('PATCH', { files: { 'data.json': { content: JSON.stringify(toSave) } } });
-    _cache = toSave;
+    await ghApi('PATCH', { files: { 'data.json': { content: JSON.stringify(_cache) } } });
     _lastGistWrite = Date.now();
     saveTmp();
   } catch { _dirty = true; }
@@ -441,7 +443,7 @@ module.exports = async (req, res) => {
   }));
 
   if (hasMutation) markDirty();
-  await maybeSyncToGist();
+  await syncToGist();
 
   if (setCookie) res.setHeader('Set-Cookie', `admin_session=${setCookie}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`);
   if (clearCookie) res.setHeader('Set-Cookie', 'admin_session=; Path=/; HttpOnly; Max-Age=0');
