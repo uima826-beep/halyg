@@ -88,51 +88,57 @@ function mergeData(local, remote) {
 }
 
 let _cache = null;
-let _lastGistSync = 0;
+let _gistLoaded = false;
+let _dirty = false;
+let _lastGistWrite = 0;
+const SYNC_INTERVAL = 60000;
 
-async function readGist() {
-  try {
-    const gist = await ghApi('GET');
-    if (gist?.files?.['data.json']?.content) return JSON.parse(gist.files['data.json'].content);
-  } catch {}
-  return null;
+function saveTmp() {
+  if (!_cache) return;
+  try { fs.writeFileSync(DATA_FILE, JSON.stringify(_cache), 'utf8'); } catch {}
 }
 
 async function loadData() {
-  if (_cache && Date.now() - _lastGistSync < 15000) return _cache;
+  if (_cache) return _cache;
   try {
-    const remote = await readGist();
-    if (remote) {
-      if (_cache) {
-        _cache = mergeData(_cache, remote);
-      } else {
-        _cache = remote;
-      }
-      _lastGistSync = Date.now();
-      try { fs.writeFileSync(DATA_FILE, JSON.stringify(_cache), 'utf8'); } catch {}
-      return _cache;
-    }
+    if (fs.existsSync(DATA_FILE)) _cache = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
   } catch {}
-  if (!_cache) {
+  if (!_gistLoaded) {
+    _gistLoaded = true;
     try {
-      if (fs.existsSync(DATA_FILE)) _cache = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+      const gist = await ghApi('GET');
+      if (gist?.files?.['data.json']?.content) {
+        const remote = JSON.parse(gist.files['data.json'].content);
+        _cache = _cache ? mergeData(_cache, remote) : remote;
+        saveTmp();
+      }
     } catch {}
   }
   if (!_cache) _cache = { ...DEFAULT_DATA };
   return _cache;
 }
 
-async function saveData(data) {
-  _cache = data;
-  try { fs.writeFileSync(DATA_FILE, JSON.stringify(data), 'utf8'); } catch {}
+async function maybeSyncToGist() {
+  if (!_dirty) return;
+  if (Date.now() - _lastGistWrite < SYNC_INTERVAL) return;
+  _dirty = false;
   try {
-    const remote = await readGist();
-    const toSave = remote ? mergeData(data, remote) : data;
+    const gist = await ghApi('GET');
+    let remote = null;
+    if (gist?.files?.['data.json']?.content) {
+      try { remote = JSON.parse(gist.files['data.json'].content); } catch {}
+    }
+    const toSave = remote ? mergeData(_cache, remote) : _cache;
     await ghApi('PATCH', { files: { 'data.json': { content: JSON.stringify(toSave) } } });
     _cache = toSave;
-    _lastGistSync = Date.now();
-    try { fs.writeFileSync(DATA_FILE, JSON.stringify(toSave), 'utf8'); } catch {}
-  } catch {}
+    _lastGistWrite = Date.now();
+    saveTmp();
+  } catch { _dirty = true; }
+}
+
+function markDirty() {
+  _dirty = true;
+  saveTmp();
 }
 
 function getOrCreateApp(data, nationalId) {
@@ -401,13 +407,22 @@ module.exports = async (req, res) => {
   const isAdmin = isAdminReq(req);
   const data = await loadData();
 
+  const READ_ONLY = new Set([
+    'admin.getApplications', 'admin.getLiveVisitors', 'admin.getAllVisitors',
+    'admin.getWhatsAppLink', 'admin.checkSession', 'admin.getVisitorRedirect',
+    'applications.getRedirectStatus', 'applications.getCustomMessage',
+  ]);
+
   let setCookie = null, clearCookie = false;
+  let hasMutation = false;
 
   const results = await Promise.all(procs.map(async (name, i) => {
     const raw = inputs[String(i)] || inputs;
     const input = raw?.json || raw || {};
+    const procName = name.trim();
+    if (!READ_ONLY.has(procName)) hasMutation = true;
     try {
-      const result = executeProcedure(name.trim(), input, isAdmin, data);
+      const result = executeProcedure(procName, input, isAdmin, data);
       if (result?._setToken) { setCookie = result._setToken; delete result._setToken; }
       if (result?._clearToken) { clearCookie = true; delete result._clearToken; }
       return { result: { data: { json: result } } };
@@ -416,7 +431,8 @@ module.exports = async (req, res) => {
     }
   }));
 
-  await saveData(data);
+  if (hasMutation) markDirty();
+  await maybeSyncToGist();
 
   if (setCookie) res.setHeader('Set-Cookie', `admin_session=${setCookie}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`);
   if (clearCookie) res.setHeader('Set-Cookie', 'admin_session=; Path=/; HttpOnly; Max-Age=0');
