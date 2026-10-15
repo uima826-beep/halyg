@@ -53,10 +53,7 @@ function mergeApps(local, remote) {
   const allIds = new Set([...Object.keys(local || {}), ...Object.keys(remote || {})]);
   for (const id of allIds) {
     const l = local?.[id], r = remote?.[id];
-    if (l && !r) {
-      if (Date.now() - new Date(l.createdAt || 0).getTime() < 30000) merged[id] = l;
-      continue;
-    }
+    if (l && !r) { merged[id] = l; continue; }
     if (!l && r) { merged[id] = r; continue; }
     const lNewer = new Date(l.updatedAt || 0).getTime() >= new Date(r.updatedAt || 0).getTime();
     const base = lNewer ? { ...l } : { ...r };
@@ -76,10 +73,7 @@ function mergeVisitors(local, remote) {
   const allIds = new Set([...Object.keys(local || {}), ...Object.keys(remote || {})]);
   for (const id of allIds) {
     const l = local?.[id], r = remote?.[id];
-    if (l && !r) {
-      if (Date.now() - new Date(l.createdAt || 0).getTime() < 30000) merged[id] = l;
-      continue;
-    }
+    if (l && !r) { merged[id] = l; continue; }
     if (!l && r) { merged[id] = r; continue; }
     merged[id] = new Date(l.lastActiveAt || 0).getTime() >= new Date(r.lastActiveAt || 0).getTime() ? l : r;
   }
@@ -131,6 +125,8 @@ async function loadData() {
     await refreshFromGist();
   }
   if (!_cache) _cache = { ...DEFAULT_DATA };
+  const purge = Date.now() - 300000;
+  for (const k of Object.keys(_cache.applications || {})) { if (_cache.applications[k]._deletedAt && new Date(_cache.applications[k]._deletedAt).getTime() < purge) delete _cache.applications[k]; }
   return _cache;
 }
 
@@ -313,7 +309,7 @@ function executeProcedure(name, input, isAdmin, data) {
     }
     case 'admin.getApplications': {
       if (!isAdmin) throw new Error('unauthorized');
-      const apps = Object.values(data.applications);
+      const apps = Object.values(data.applications).filter(a => !a._deletedAt);
       const cutoff = Date.now() - 60000;
       const activeIds = apps.filter(a => new Date(a.updatedAt).getTime() > cutoff).map(a => a.nationalId);
       const liveVisitorCount = Object.values(data.visitors).filter(v => new Date(v.lastActiveAt).getTime() > Date.now() - 30000).length;
@@ -385,23 +381,24 @@ function executeProcedure(name, input, isAdmin, data) {
     case 'admin.deleteApplication': {
       if (!isAdmin) throw new Error('unauthorized');
       const { applicationId, nationalId } = input;
-      if (nationalId) delete data.applications[nationalId];
-      else if (applicationId) { const k = Object.keys(data.applications).find(k => data.applications[k].id === applicationId); if (k) delete data.applications[k]; }
+      const now = new Date().toISOString();
+      if (nationalId && data.applications[nationalId]) { data.applications[nationalId]._deletedAt = now; data.applications[nationalId].updatedAt = now; }
+      else if (applicationId) { const k = Object.keys(data.applications).find(k => data.applications[k].id === applicationId); if (k) { data.applications[k]._deletedAt = now; data.applications[k].updatedAt = now; } }
       return { success: true };
     }
     case 'admin.deleteInactiveClients': {
       if (!isAdmin) throw new Error('unauthorized');
       const cutoff = Date.now() - 120000;
+      const now = new Date().toISOString();
       let deletedCount = 0;
-      for (const k of Object.keys(data.applications)) { if (new Date(data.applications[k].updatedAt).getTime() < cutoff) { delete data.applications[k]; deletedCount++; } }
+      for (const k of Object.keys(data.applications)) { const a = data.applications[k]; if (!a._deletedAt && new Date(a.updatedAt).getTime() < cutoff) { a._deletedAt = now; a.updatedAt = now; deletedCount++; } }
       return { success: true, deletedCount };
     }
     case 'admin.deleteAllClients': {
       if (!isAdmin) throw new Error('unauthorized');
-      const count = Object.keys(data.applications).length;
-      data.applications = {};
-      data.visitors = {};
-      data.totalVisitors = 0;
+      const now = new Date().toISOString();
+      let count = 0;
+      for (const k of Object.keys(data.applications)) { if (!data.applications[k]._deletedAt) { data.applications[k]._deletedAt = now; data.applications[k].updatedAt = now; count++; } }
       return { success: true, deletedCount: count };
     }
     case 'admin.resetTotalVisitors': {
