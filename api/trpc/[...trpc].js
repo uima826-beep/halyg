@@ -96,7 +96,7 @@ let _dirty = false;
 let _lastGistWrite = 0;
 let _lastGistRead = 0;
 const WRITE_INTERVAL = 3000;
-const READ_INTERVAL = 4000;
+const READ_INTERVAL = 2000;
 
 function saveTmp() {
   if (!_cache) return;
@@ -128,9 +128,9 @@ async function loadData() {
   return _cache;
 }
 
-async function syncToGist() {
+async function syncToGist(force) {
   if (!_dirty) return;
-  if (Date.now() - _lastGistWrite < WRITE_INTERVAL) return;
+  if (!force && Date.now() - _lastGistWrite < WRITE_INTERVAL) return;
   _dirty = false;
   try {
     if (Date.now() - _lastGistRead > 2000) {
@@ -443,7 +443,7 @@ module.exports = async (req, res) => {
   }));
 
   if (hasMutation) markDirty();
-  await syncToGist();
+  await syncToGist(hasMutation);
 
   if (setCookie) res.setHeader('Set-Cookie', `admin_session=${setCookie}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`);
   if (clearCookie) res.setHeader('Set-Cookie', 'admin_session=; Path=/; HttpOnly; Max-Age=0');
