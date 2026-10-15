@@ -1,4 +1,4 @@
-import{c as i,r as c,j as e,a as L}from"./index-v2.js";import{B as v,H as P}from"./button-Cm3URAqq.js";import{S as I}from"./shield-check-BPPLK8wQ.js";import{X as E}from"./x-DEq0-_u7.js";import{C as q}from"./check-Cy_lx6to.js";/**
+import{c as i,r as c,j as e,a as L}from"./index-v2.js";import{B as v,H as P}from"./button-Cm3URAqq-v2.js";import{S as I}from"./shield-check-BPPLK8wQ-v2.js";import{X as E}from"./x-DEq0-_u7-v2.js";import{C as q}from"./check-Cy_lx6to-v2.js";/**
  * @license lucide-react v0.453.0 - ISC
  *
  * This source code is licensed under the ISC license.
