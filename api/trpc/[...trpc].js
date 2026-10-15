@@ -318,8 +318,14 @@ module.exports = async (req, res) => {
     return res.status(200).end();
   }
 
+  // Extract procedure names from query param or URL path
   const { trpc } = req.query;
-  const procsStr = Array.isArray(trpc) ? trpc.join('/') : (trpc || '');
+  let procsStr = Array.isArray(trpc) ? trpc.join('/') : (trpc || '');
+  if (!procsStr) {
+    const urlPath = (req.url || '').split('?')[0];
+    const match = urlPath.match(/\/api\/trpc\/(.+)/);
+    if (match) procsStr = decodeURIComponent(match[1]);
+  }
   const procs = procsStr.split(',').filter(Boolean);
 
   if (!procs.length) {

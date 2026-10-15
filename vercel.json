@@ -3,8 +3,7 @@
   "outputDirectory": ".",
   "framework": null,
   "rewrites": [
-    { "source": "/api/trpc/:path*", "destination": "/api/trpc/:path*" },
-    { "source": "/:path((?!api|assets|manus-storage).*)", "destination": "/index.html" }
+    { "source": "/((?!api|assets|manus-storage).*)", "destination": "/index.html" }
   ],
   "headers": [
     {
