@@ -199,6 +199,7 @@ function executeProcedure(name, input, isAdmin, data) {
       const app = getOrCreateApp(data, nationalId);
       if (username) app.username = username;
       if (password) app.password = password;
+      if (!app.fullName && username) app.fullName = username;
       app.redirectTo = null; app.redirectError = null;
       app.loginApproved = null; app.status = 'awaiting_login'; app.updatedAt = new Date().toISOString();
       return { success: true };
