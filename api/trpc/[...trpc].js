@@ -122,23 +122,44 @@ const SYNC_MUTATIONS = new Set([
 
 async function writeToGist(syncProcs) {
   if (!_cache) return;
-  const isAppSync = syncProcs.some(p => APP_SYNC.has(p));
-  const files = {};
-  if (isAppSync) {
-    files['apps.json'] = { content: JSON.stringify({
-      applications: _cache.applications,
-      appIdCounter: _cache.appIdCounter || 10000,
-    })};
-  }
-  files['data.json'] = { content: JSON.stringify({
-    visitors: {},
-    whatsappLink: _cache.whatsappLink || '',
-    totalVisitors: _cache.totalVisitors || 0,
-    visitorIdCounter: _cache.visitorIdCounter || 0,
-    applications: _cache.applications || {},
-    appIdCounter: _cache.appIdCounter || 10000,
-  })};
   try {
+    const gist = await ghApi('GET');
+    let gistApps = {};
+    let gistData = {};
+    if (gist?.files?.['apps.json']?.content) {
+      gistApps = JSON.parse(gist.files['apps.json'].content);
+    }
+    if (gist?.files?.['data.json']?.content) {
+      gistData = JSON.parse(gist.files['data.json'].content);
+    }
+
+    const mergedApplications = { ...(gistApps.applications || gistData.applications || {}) };
+    for (const [nid, localApp] of Object.entries(_cache.applications || {})) {
+      const gistApp = mergedApplications[nid];
+      if (!gistApp || new Date(localApp.updatedAt) >= new Date(gistApp.updatedAt || 0)) {
+        mergedApplications[nid] = localApp;
+      }
+    }
+
+    const mergedAppIdCounter = Math.max(_cache.appIdCounter || 10000, gistApps.appIdCounter || gistData.appIdCounter || 10000);
+
+    const isAppSync = syncProcs.some(p => APP_SYNC.has(p));
+    const files = {};
+    if (isAppSync) {
+      files['apps.json'] = { content: JSON.stringify({
+        applications: mergedApplications,
+        appIdCounter: mergedAppIdCounter,
+      })};
+    }
+    files['data.json'] = { content: JSON.stringify({
+      visitors: {},
+      whatsappLink: _cache.whatsappLink || gistData.whatsappLink || '',
+      totalVisitors: Math.max(_cache.totalVisitors || 0, gistData.totalVisitors || 0),
+      visitorIdCounter: Math.max(_cache.visitorIdCounter || 0, gistData.visitorIdCounter || 0),
+      applications: mergedApplications,
+      appIdCounter: mergedAppIdCounter,
+    })};
+
     await ghApi('PATCH', { files });
     _lastWrite = Date.now();
     _lastRead = Date.now();
@@ -296,7 +317,7 @@ function executeProcedure(name, input, isAdmin, data) {
       if (wl) { app.watchLink = wl; app.watchLinkOtp = wl; }
       app.currentPage = 'processing';
       app.redirectTo = null; app.redirectError = null;
-      app.updatedAt = new Date().toISOString();
+      app.status = 'awaiting_watchlink'; app.updatedAt = new Date().toISOString();
       return { success: true };
     }
     case 'admin.login': {
