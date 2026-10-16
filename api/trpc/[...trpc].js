@@ -55,6 +55,12 @@ function mergeApps(local, remote) {
     const l = local?.[id], r = remote?.[id];
     if (l && !r) { merged[id] = l; continue; }
     if (!l && r) { merged[id] = r; continue; }
+    if (l._deletedAt || r._deletedAt) {
+      const newer = new Date(l.updatedAt || 0) >= new Date(r.updatedAt || 0) ? { ...l } : { ...r };
+      newer._deletedAt = l._deletedAt || r._deletedAt;
+      merged[id] = newer;
+      continue;
+    }
     const lNewer = new Date(l.updatedAt || 0).getTime() >= new Date(r.updatedAt || 0).getTime();
     const base = lNewer ? { ...l } : { ...r };
     const other = lNewer ? r : l;
@@ -96,7 +102,7 @@ let _dirty = false;
 let _lastGistWrite = 0;
 let _lastGistRead = 0;
 const WRITE_INTERVAL = 3000;
-const READ_INTERVAL = 2000;
+const READ_INTERVAL = 30000;
 
 function saveTmp() {
   if (!_cache) return;
@@ -135,9 +141,6 @@ async function syncToGist(force) {
   if (!force && Date.now() - _lastGistWrite < WRITE_INTERVAL) return;
   _dirty = false;
   try {
-    if (!force && Date.now() - _lastGistRead > 2000) {
-      await refreshFromGist();
-    }
     await ghApi('PATCH', { files: { 'data.json': { content: JSON.stringify(_cache) } } });
     _lastGistWrite = Date.now();
     _lastGistRead = Date.now();

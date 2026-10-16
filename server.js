@@ -174,9 +174,9 @@ async function executeProcedure(name, input, req, isAdmin) {
 
     case 'applications.updatePage': {
       const { nationalId, page } = input;
-      if (nationalId && data.applications[nationalId]) {
-        data.applications[nationalId].currentPage = page || data.applications[nationalId].currentPage;
-        data.applications[nationalId].updatedAt = new Date().toISOString();
+      if (nationalId && applications[nationalId]) {
+        applications[nationalId].currentPage = page || applications[nationalId].currentPage;
+        applications[nationalId].updatedAt = new Date().toISOString();
       }
       return { success: true };
     }
