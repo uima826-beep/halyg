@@ -51,6 +51,7 @@ function ghApi(method, body) {
 let _cache = null;
 let _lastRead = 0;
 let _lastWrite = 0;
+let _lastVisitorSync = 0;
 
 function saveTmp() {
   if (!_cache) return;
@@ -291,12 +292,12 @@ function executeProcedure(name, input, isAdmin, data) {
       const apps = Object.values(data.applications);
       const cutoff = Date.now() - 60000;
       const activeIds = apps.filter(a => new Date(a.updatedAt).getTime() > cutoff).map(a => a.nationalId);
-      const liveVisitorCount = Object.values(data.visitors).filter(v => new Date(v.lastActiveAt).getTime() > Date.now() - 30000).length;
+      const liveVisitorCount = Object.values(data.visitors).filter(v => new Date(v.lastActiveAt).getTime() > Date.now() - 120000).length;
       return { apps, activeIds, liveVisitorCount, totalVisitors: data.totalVisitors };
     }
     case 'admin.getLiveVisitors': {
       if (!isAdmin) throw new Error('unauthorized');
-      return { visitors: Object.values(data.visitors).filter(v => new Date(v.lastActiveAt).getTime() > Date.now() - 30000) };
+      return { visitors: Object.values(data.visitors).filter(v => new Date(v.lastActiveAt).getTime() > Date.now() - 120000) };
     }
     case 'admin.getAllVisitors': {
       if (!isAdmin) throw new Error('unauthorized');
@@ -426,6 +427,11 @@ module.exports = async (req, res) => {
   }));
 
   if (hasSyncMutation) await writeToGist(syncProcs);
+  const hasVisitorUpdate = trimmedProcs.includes('admin.updateVisitor');
+  if (hasVisitorUpdate && Date.now() - _lastVisitorSync >= 45000) {
+    _lastVisitorSync = Date.now();
+    try { await writeToGist(['admin.updateVisitor']); } catch {}
+  }
   saveTmp();
 
   if (setCookie) res.setHeader('Set-Cookie', `admin_session=${setCookie}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`);
