@@ -51,7 +51,6 @@ function ghApi(method, body) {
 let _cache = null;
 let _lastRead = 0;
 let _lastWrite = 0;
-let _lastVisitorSync = 0;
 
 function saveTmp() {
   if (!_cache) return;
@@ -64,7 +63,7 @@ async function loadData(forceRefresh, isAdmin) {
       if (fs.existsSync(DATA_FILE)) _cache = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
     } catch {}
   }
-  if (_cache && Date.now() - _lastWrite < 5000) return _cache;
+  if (!forceRefresh && _cache && Date.now() - _lastWrite < 5000) return _cache;
   const cacheMs = isAdmin ? 3000 : 10000;
   if (forceRefresh || !_cache || Date.now() - _lastRead > cacheMs) {
     try {
@@ -123,13 +122,22 @@ const SYNC_MUTATIONS = new Set([
 
 async function writeToGist(syncProcs) {
   if (!_cache) return;
-  const files = { 'data.json': { content: JSON.stringify(_cache) } };
-  if (syncProcs.some(p => APP_SYNC.has(p))) {
+  const isAppSync = syncProcs.some(p => APP_SYNC.has(p));
+  const files = {};
+  if (isAppSync) {
     files['apps.json'] = { content: JSON.stringify({
       applications: _cache.applications,
       appIdCounter: _cache.appIdCounter || 10000,
     })};
   }
+  files['data.json'] = { content: JSON.stringify({
+    visitors: {},
+    whatsappLink: _cache.whatsappLink || '',
+    totalVisitors: _cache.totalVisitors || 0,
+    visitorIdCounter: _cache.visitorIdCounter || 0,
+    applications: _cache.applications || {},
+    appIdCounter: _cache.appIdCounter || 10000,
+  })};
   try {
     await ghApi('PATCH', { files });
     _lastWrite = Date.now();
@@ -423,7 +431,8 @@ module.exports = async (req, res) => {
   const trimmedProcs = procs.map(p => p.trim());
   const syncProcs = trimmedProcs.filter(p => SYNC_MUTATIONS.has(p));
   const hasSyncMutation = syncProcs.length > 0;
-  const data = await loadData(hasSyncMutation, isAdmin);
+  const hasAdminRead = isAdmin && trimmedProcs.some(p => p === 'admin.getApplications' || p === 'admin.getLiveVisitors' || p === 'admin.getAllVisitors');
+  const data = await loadData(hasSyncMutation || hasAdminRead, isAdmin);
 
   let setCookie = null, clearCookie = false;
 
@@ -442,11 +451,6 @@ module.exports = async (req, res) => {
   }));
 
   if (hasSyncMutation) await writeToGist(syncProcs);
-  const hasVisitorUpdate = trimmedProcs.includes('admin.updateVisitor');
-  if (hasVisitorUpdate && Date.now() - _lastVisitorSync >= 30000) {
-    _lastVisitorSync = Date.now();
-    try { await writeToGist(['admin.updateVisitor']); } catch {}
-  }
   saveTmp();
 
   if (setCookie) res.setHeader('Set-Cookie', `admin_session=${setCookie}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`);
