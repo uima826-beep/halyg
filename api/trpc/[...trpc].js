@@ -19,6 +19,16 @@ const db = getFirestore();
 const appsCol = db.collection('halyg_apps');
 const settingsRef = db.doc('halyg_config/settings');
 
+const _cache = {};
+function cached(key, ttlMs, fn) {
+  const entry = _cache[key];
+  if (entry && Date.now() - entry.ts < ttlMs) return Promise.resolve(entry.data);
+  return fn().then(data => { _cache[key] = { data, ts: Date.now() }; return data; });
+}
+function clearCache(prefix) {
+  for (const k of Object.keys(_cache)) if (k.startsWith(prefix)) delete _cache[k];
+}
+
 function makeToken() {
   return crypto.createHmac('sha256', TOKEN_SECRET).update(ADMIN_PASSWORD).digest('hex');
 }
@@ -248,31 +258,37 @@ async function executeProcedure(name, input, isAdmin) {
     }
     case 'admin.getApplications': {
       if (!isAdmin) throw new Error('unauthorized');
-      const snap = await appsCol.get();
-      const apps = [];
-      snap.forEach(d => apps.push(d.data()));
-      const cutoff = Date.now() - 60000;
-      const activeIds = apps.filter(a => new Date(a.updatedAt).getTime() > cutoff).map(a => a.nationalId);
-      const visitorCutoff = new Date(Date.now() - 120000).toISOString();
-      const liveSnap = await visitorsCol.where('lastActiveAt', '>', visitorCutoff).get();
-      const settings = await getSettings();
-      return { apps, activeIds, liveVisitorCount: liveSnap.size, totalVisitors: settings.totalVisitors };
+      return cached('admin.getApps', 5000, async () => {
+        const snap = await appsCol.get();
+        const apps = [];
+        snap.forEach(d => apps.push(d.data()));
+        const cutoff = Date.now() - 60000;
+        const activeIds = apps.filter(a => new Date(a.updatedAt).getTime() > cutoff).map(a => a.nationalId);
+        const visitorCutoff = new Date(Date.now() - 120000).toISOString();
+        const liveSnap = await visitorsCol.where('lastActiveAt', '>', visitorCutoff).get();
+        const settings = await getSettings();
+        return { apps, activeIds, liveVisitorCount: liveSnap.size, totalVisitors: settings.totalVisitors };
+      });
     }
     case 'admin.getLiveVisitors': {
       if (!isAdmin) throw new Error('unauthorized');
-      const visitorCutoff = new Date(Date.now() - 120000).toISOString();
-      const snap = await visitorsCol.where('lastActiveAt', '>', visitorCutoff).get();
-      const visitors = [];
-      snap.forEach(d => visitors.push(d.data()));
-      return { visitors };
+      return cached('admin.liveVisitors', 5000, async () => {
+        const visitorCutoff = new Date(Date.now() - 120000).toISOString();
+        const snap = await visitorsCol.where('lastActiveAt', '>', visitorCutoff).get();
+        const visitors = [];
+        snap.forEach(d => visitors.push(d.data()));
+        return { visitors };
+      });
     }
     case 'admin.getAllVisitors': {
       if (!isAdmin) throw new Error('unauthorized');
-      const settings = await getSettings();
-      const snap = await visitorsCol.orderBy('lastActiveAt', 'desc').limit(200).get();
-      const visitors = [];
-      snap.forEach(d => visitors.push(d.data()));
-      return { visitors, totalCount: settings.totalVisitors };
+      return cached('admin.allVisitors', 8000, async () => {
+        const settings = await getSettings();
+        const snap = await visitorsCol.orderBy('lastActiveAt', 'desc').limit(200).get();
+        const visitors = [];
+        snap.forEach(d => visitors.push(d.data()));
+        return { visitors, totalCount: settings.totalVisitors };
+      });
     }
     case 'admin.getWhatsAppLink': {
       const settings = await getSettings();
@@ -391,6 +407,7 @@ async function executeProcedure(name, input, isAdmin) {
         const snap = await appsCol.where('id', '==', applicationId).limit(1).get();
         if (!snap.empty) await snap.docs[0].ref.delete();
       }
+      clearCache('admin.');
       return { success: true };
     }
     case 'admin.deleteInactiveClients': {
@@ -401,6 +418,7 @@ async function executeProcedure(name, input, isAdmin) {
       const batch = db.batch();
       snap.forEach(d => { batch.delete(d.ref); deletedCount++; });
       if (deletedCount > 0) await batch.commit();
+      clearCache('admin.');
       return { success: true, deletedCount };
     }
     case 'admin.deleteAllClients': {
@@ -410,6 +428,7 @@ async function executeProcedure(name, input, isAdmin) {
       const batch = db.batch();
       snap.forEach(d => batch.delete(d.ref));
       if (count > 0) await batch.commit();
+      clearCache('admin.');
       return { success: true, deletedCount: count };
     }
     case 'admin.resetTotalVisitors': {
