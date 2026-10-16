@@ -107,19 +107,13 @@ const SYNC_MUTATIONS = new Set([
 
 async function writeToGist(syncProcs) {
   if (!_cache) return;
-  const files = {};
-  const hasAppSync = syncProcs.some(p => APP_SYNC.has(p));
-  const hasOtherSync = syncProcs.some(p => SYNC_MUTATIONS.has(p) && !APP_SYNC.has(p));
-  if (hasAppSync) {
+  const files = { 'data.json': { content: JSON.stringify(_cache) } };
+  if (syncProcs.some(p => APP_SYNC.has(p))) {
     files['apps.json'] = { content: JSON.stringify({
       applications: _cache.applications,
       appIdCounter: _cache.appIdCounter || 10000,
     })};
   }
-  if (hasOtherSync) {
-    files['data.json'] = { content: JSON.stringify(_cache) };
-  }
-  if (!Object.keys(files).length) return;
   try {
     await ghApi('PATCH', { files });
     _lastWrite = Date.now();
