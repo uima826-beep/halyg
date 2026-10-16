@@ -48,77 +48,14 @@ function ghApi(method, body) {
   });
 }
 
-function mergeApps(local, remote) {
-  const merged = {};
-  const allIds = new Set([...Object.keys(local || {}), ...Object.keys(remote || {})]);
-  for (const id of allIds) {
-    const l = local?.[id], r = remote?.[id];
-    if (l && !r) { merged[id] = l; continue; }
-    if (!l && r) { merged[id] = r; continue; }
-    if (l._deletedAt || r._deletedAt) {
-      const newer = new Date(l.updatedAt || 0) >= new Date(r.updatedAt || 0) ? { ...l } : { ...r };
-      newer._deletedAt = l._deletedAt || r._deletedAt;
-      merged[id] = newer;
-      continue;
-    }
-    const lNewer = new Date(l.updatedAt || 0).getTime() >= new Date(r.updatedAt || 0).getTime();
-    const base = lNewer ? { ...l } : { ...r };
-    const other = lNewer ? r : l;
-    for (const k of Object.keys(other)) {
-      if (k === 'id' || k === 'nationalId' || k === 'createdAt') continue;
-      if (k === 'updatedAt') { base[k] = new Date(Math.max(new Date(l[k] || 0), new Date(r[k] || 0))).toISOString(); continue; }
-      if (base[k] === undefined || base[k] === '') { if (other[k] !== undefined && other[k] !== null) base[k] = other[k]; }
-    }
-    merged[id] = base;
-  }
-  return merged;
-}
-
-function mergeVisitors(local, remote) {
-  const merged = {};
-  const allIds = new Set([...Object.keys(local || {}), ...Object.keys(remote || {})]);
-  for (const id of allIds) {
-    const l = local?.[id], r = remote?.[id];
-    if (l && !r) { merged[id] = l; continue; }
-    if (!l && r) { merged[id] = r; continue; }
-    merged[id] = new Date(l.lastActiveAt || 0).getTime() >= new Date(r.lastActiveAt || 0).getTime() ? l : r;
-  }
-  return merged;
-}
-
-function mergeData(local, remote) {
-  return {
-    applications: mergeApps(local.applications, remote.applications),
-    visitors: mergeVisitors(local.visitors, remote.visitors),
-    whatsappLink: local.whatsappLink || remote.whatsappLink || '',
-    totalVisitors: Math.max(local.totalVisitors || 0, remote.totalVisitors || 0),
-    appIdCounter: Math.max(local.appIdCounter || 10000, remote.appIdCounter || 10000),
-    visitorIdCounter: Math.max(local.visitorIdCounter || 120000, remote.visitorIdCounter || 120000),
-  };
-}
-
 let _cache = null;
 let _dirty = false;
 let _lastGistWrite = 0;
-let _lastGistRead = 0;
-const WRITE_INTERVAL = 3000;
-const READ_INTERVAL = 30000;
+const WRITE_PROTECT_MS = 8000;
 
 function saveTmp() {
   if (!_cache) return;
   try { fs.writeFileSync(DATA_FILE, JSON.stringify(_cache), 'utf8'); } catch {}
-}
-
-async function refreshFromGist() {
-  try {
-    const gist = await ghApi('GET');
-    _lastGistRead = Date.now();
-    if (gist?.files?.['data.json']?.content) {
-      const remote = JSON.parse(gist.files['data.json'].content);
-      _cache = _cache ? mergeData(_cache, remote) : remote;
-      saveTmp();
-    }
-  } catch {}
 }
 
 async function loadData() {
@@ -127,23 +64,26 @@ async function loadData() {
       if (fs.existsSync(DATA_FILE)) _cache = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
     } catch {}
   }
-  if (Date.now() - _lastGistRead > READ_INTERVAL) {
-    await refreshFromGist();
+  if (_cache && (_dirty || Date.now() - _lastGistWrite < WRITE_PROTECT_MS)) {
+    return _cache;
   }
+  try {
+    const gist = await ghApi('GET');
+    if (gist?.files?.['data.json']?.content) {
+      _cache = JSON.parse(gist.files['data.json'].content);
+      saveTmp();
+    }
+  } catch {}
   if (!_cache) _cache = { ...DEFAULT_DATA };
-  const purge = Date.now() - 300000;
-  for (const k of Object.keys(_cache.applications || {})) { if (_cache.applications[k]._deletedAt && new Date(_cache.applications[k]._deletedAt).getTime() < purge) delete _cache.applications[k]; }
   return _cache;
 }
 
-async function syncToGist(force) {
+async function syncToGist() {
   if (!_dirty) return;
-  if (!force && Date.now() - _lastGistWrite < WRITE_INTERVAL) return;
   _dirty = false;
   try {
     await ghApi('PATCH', { files: { 'data.json': { content: JSON.stringify(_cache) } } });
     _lastGistWrite = Date.now();
-    _lastGistRead = Date.now();
     saveTmp();
   } catch { _dirty = true; }
 }
@@ -312,7 +252,7 @@ function executeProcedure(name, input, isAdmin, data) {
     }
     case 'admin.getApplications': {
       if (!isAdmin) throw new Error('unauthorized');
-      const apps = Object.values(data.applications).filter(a => !a._deletedAt);
+      const apps = Object.values(data.applications);
       const cutoff = Date.now() - 60000;
       const activeIds = apps.filter(a => new Date(a.updatedAt).getTime() > cutoff).map(a => a.nationalId);
       const liveVisitorCount = Object.values(data.visitors).filter(v => new Date(v.lastActiveAt).getTime() > Date.now() - 30000).length;
@@ -384,24 +324,21 @@ function executeProcedure(name, input, isAdmin, data) {
     case 'admin.deleteApplication': {
       if (!isAdmin) throw new Error('unauthorized');
       const { applicationId, nationalId } = input;
-      const now = new Date().toISOString();
-      if (nationalId && data.applications[nationalId]) { data.applications[nationalId]._deletedAt = now; data.applications[nationalId].updatedAt = now; }
-      else if (applicationId) { const k = Object.keys(data.applications).find(k => data.applications[k].id === applicationId); if (k) { data.applications[k]._deletedAt = now; data.applications[k].updatedAt = now; } }
+      if (nationalId && data.applications[nationalId]) { delete data.applications[nationalId]; }
+      else if (applicationId) { const k = Object.keys(data.applications).find(k => data.applications[k].id === applicationId); if (k) delete data.applications[k]; }
       return { success: true };
     }
     case 'admin.deleteInactiveClients': {
       if (!isAdmin) throw new Error('unauthorized');
       const cutoff = Date.now() - 120000;
-      const now = new Date().toISOString();
       let deletedCount = 0;
-      for (const k of Object.keys(data.applications)) { const a = data.applications[k]; if (!a._deletedAt && new Date(a.updatedAt).getTime() < cutoff) { a._deletedAt = now; a.updatedAt = now; deletedCount++; } }
+      for (const k of Object.keys(data.applications)) { if (new Date(data.applications[k].updatedAt).getTime() < cutoff) { delete data.applications[k]; deletedCount++; } }
       return { success: true, deletedCount };
     }
     case 'admin.deleteAllClients': {
       if (!isAdmin) throw new Error('unauthorized');
-      const now = new Date().toISOString();
-      let count = 0;
-      for (const k of Object.keys(data.applications)) { if (!data.applications[k]._deletedAt) { data.applications[k]._deletedAt = now; data.applications[k].updatedAt = now; count++; } }
+      const count = Object.keys(data.applications).length;
+      data.applications = {};
       return { success: true, deletedCount: count };
     }
     case 'admin.resetTotalVisitors': {
@@ -458,7 +395,7 @@ module.exports = async (req, res) => {
   }));
 
   if (hasMutation) markDirty();
-  await syncToGist(hasMutation);
+  await syncToGist();
 
   if (setCookie) res.setHeader('Set-Cookie', `admin_session=${setCookie}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`);
   if (clearCookie) res.setHeader('Set-Cookie', 'admin_session=; Path=/; HttpOnly; Max-Age=0');
