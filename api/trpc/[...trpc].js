@@ -70,7 +70,11 @@ async function loadData(forceRefresh, isAdmin) {
     try {
       const gist = await ghApi('GET');
       if (gist?.files) {
-        let base = _cache || { ...DEFAULT_DATA };
+        const localVisitors = _cache?.visitors || {};
+        const localTotalVisitors = _cache?.totalVisitors || 0;
+        const localVisitorIdCounter = _cache?.visitorIdCounter || 0;
+
+        let base = { ...DEFAULT_DATA };
         if (gist.files['data.json']?.content) {
           base = JSON.parse(gist.files['data.json'].content);
         }
@@ -79,6 +83,17 @@ async function loadData(forceRefresh, isAdmin) {
           base.applications = ad.applications || base.applications || {};
           if (ad.appIdCounter) base.appIdCounter = ad.appIdCounter;
         }
+        if (!base.visitors) base.visitors = {};
+
+        for (const [sid, localV] of Object.entries(localVisitors)) {
+          const gistV = base.visitors[sid];
+          if (!gistV || new Date(localV.lastActiveAt) > new Date(gistV.lastActiveAt || 0)) {
+            base.visitors[sid] = localV;
+          }
+        }
+        base.totalVisitors = Math.max(base.totalVisitors || 0, localTotalVisitors);
+        base.visitorIdCounter = Math.max(base.visitorIdCounter || 0, localVisitorIdCounter);
+
         _cache = base;
         _lastRead = Date.now();
         saveTmp();
@@ -428,7 +443,7 @@ module.exports = async (req, res) => {
 
   if (hasSyncMutation) await writeToGist(syncProcs);
   const hasVisitorUpdate = trimmedProcs.includes('admin.updateVisitor');
-  if (hasVisitorUpdate && Date.now() - _lastVisitorSync >= 45000) {
+  if (hasVisitorUpdate && Date.now() - _lastVisitorSync >= 30000) {
     _lastVisitorSync = Date.now();
     try { await writeToGist(['admin.updateVisitor']); } catch {}
   }
