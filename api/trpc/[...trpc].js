@@ -1,10 +1,11 @@
 const crypto = require('crypto');
 const { initializeApp, getApps, cert } = require('firebase-admin/app');
-const { getFirestore, FieldValue } = require('firebase-admin/firestore');
+const { getDatabase } = require('firebase-admin/database');
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin1234@@';
 const TOKEN_SECRET = process.env.TOKEN_SECRET || 'halyg-admin-secret-key-2026';
-const FB_SA_B64 = 'ewogICJ0eXBlIjogInNlcnZpY2VfYWNjb3VudCIsCiAgInByb2plY3RfaWQiOiAianVzb3VyLXFhdGFyIiwKICAicHJpdmF0ZV9rZXlfaWQiOiAiMzM1NjgwMzYyNDZiMmRiYjk3M2JjYjQzMTY5MDAwYTA1YjZmM2Y2NiIsCiAgInByaXZhdGVfa2V5IjogIi0tLS0tQkVHSU4gUFJJVkFURSBLRVktLS0tLVxuTUlJRXZRSUJBREFOQmdrcWhraUc5dzBCQVFFRkFBU0NCS2N3Z2dTakFnRUFBb0lCQVFDcStDa2xlSWY1VSs5dVxuL0J3ZzVPY1ZjWkpwbjg0dHFwSWhWeE5GUWVEVmIvdzN1ZklLY2ppOHRUbENTdkw5NGZFTVBBa0hjVDE2WmY3bVxuWjMzM1JOckYwTm91UWNXdEwwZzJOS2JaWWlrQVJpcmdneTBCWlN1WFJJOStVMmZTMzV3d3pLN1lPVWpHOEdkNFxuVVBaT1p1TkZZOEdVUDBHY1NEOE5iUEJsL2FRLzZSbnJncmZBbjdPb3pZQkh1VGRsQWF1bWRkR0xEOUtBNjFiYlxuelJEclh5cjBmRnFzRVA4dGd4d1BJa2cwbG10Qm5WL0dBTFlGbmNIZUlWZmNhVGNKNDFKTnRmczhXT2hUTnZUK1xuZXhBNVNQN0k1Q0FMdlArZm1QSGx4bGdVY3c4QmRxV3FKcFp4VVJZVXlPMFBqNTI1MmU4V2ZKNmNITVRMRHJFNFxuUnNZV3FpTDVBZ01CQUFFQ2dnRUFBLzRsWTZGaWdmOG9XVDMrVGttVUEyM2liNHR3MkFjZlIxNXdNWlFlc3d4NVxuVkhmeXM2YVYyVHhkZEdHaWk0S1o4dGFkRndqU1dORDBlazFNOENuT2hTY3pzTVlqMTQzN0dYREE5S25kWk1QaVxuUzZEUUxaNWJpOGlpQjlEckhMaW1HcURmVVFOMXNKNlV1T3FGSUVaVTZIMzVjTGt0eTZveUtGT1V1cXV6dXJPTlxuU1ZuV2R3VGdnOFVrU3FVN1dhQUVVMWtxOTV6akZNSEIwWXhwL2ZTRkhPNWpnb3pIZFpYZTc1b2hzSDhFVk9JMlxuMGlJc2ZyNllKRllFa0pNaHVMZ1VkTG1yV240allPbE9rSVkyckxhN2J1ZUhyY0YvS2xwS2txTk9JTWpBRmtpdVxuak1Ed2tNc0ZxQlhYZnBPckdKWnNYZ2J4ZXAwVWtjQmN6aEdTVkNEVS9RS0JnUURYVDFJT1oyeXhyVEFDNzlpNFxudTh6L0I4UnRTZHBqTGVYR293ZnNzOU0yNVZYUVhjZUxqRnZVL1BJQXRTL1JCRmlCeDVWK3Z1K0pJdkZVVGpiRlxuc3pqakh5NnViYjk4akZZa0JqYktQU2c2ckZweTN1MzJMdEsyWC9uVHVGbDIzNTFPZnA4RjJBanI1UnZzMjRGSVxudVFpSzU0WmtwSnpPZDBRVUpnV1JTbE5nalFLQmdRRExSNmFOVVppK2c2ZzRwZHZ6bU1hZnNGcXJRS2IvTnpvNlxucXIwOGRzdzlqNGRuaDdVS3NlVG5RTEhqQzE2anp2ckYxeS8xMGdYdjhrd05OcHlNbExGbTlVUS9RVC80azJabFxuNTAydEx5QktjVG1yVXhLK3N3Z1FFdmhtOWwxQlF1K1pyVTczcDJvenJLS1lESzlVbktiOUVLaVkxUk5lY2FHZlxuOHhPRTJLdS9IUUtCZ1FEQmVjS250T0prYXRjbzNIUW4xSUpxYllWaUc2cEYwem1XSEd3RGxMZm9yWDVHWmU3cFxuQkRDRkhPTXVKYUtaTlVsL0hXVEY1emVDU01jSlZkczhIa2V4T0JVUG93a2VGMUZVdjh5K1FPU0VqTm9lUFJzaVxuVElNR1pRb3U2WXBqR3AvVnFFeW55TENEb1haTmloWUx6bEhSMkNqWkNWN3EzUnRzNjVtM0xFM3VCUUtCZ0ZZNVxueTAwUWVvRDlhYUsxdituQk9TZE5iL2hLVVV2YWlrbU9XUHpIeTNTbGFDTWpMa2tlRW1HQlVMTmxCRHpwcy9ldFxuZ250OEhlYWMyV09WY2F3eitsZ1kyMTBWZVdRZ2FnUDVyRG8wemphbGRuZlVvaFBmN3lDYVcyR1pTUTlBckU5OFxuY3cyYnB2SEtYYUd2WjhPMU95UUhKK3pFSFJZbmp3NUExbHU0YUltRkFvR0FjcjlXTzdzMC9GY0luK212Wm5Wa1xuR1Zxc08zM0NFaGJObmwzVjVrc1NHcUVpcDFzL2RsVzM3TCtxS1NybExuMnRYbURPTHNDa1BERDdib1JpNDE0RFxuY1BBMGJjUXNHdkJ5SFpiVzRBOFVPMW9OUzRDWitMS2hpR2V2Wk5ORGdPRHljUmRhekMyeFluMzc2UHJ4SkkzVlxubExTWmZQSGNGWHZxWURrS0lTS0V0Y0k9XG4tLS0tLUVORCBQUklWQVRFIEtFWS0tLS0tXG4iLAogICJjbGllbnRfZW1haWwiOiAiZmlyZWJhc2UtYWRtaW5zZGstZmJzdmNAanVzb3VyLXFhdGFyLmlhbS5nc2VydmljZWFjY291bnQuY29tIiwKICAiY2xpZW50X2lkIjogIjExMTU2OTI0OTE5NjMxMDM1NTQyMyIsCiAgImF1dGhfdXJpIjogImh0dHBzOi8vYWNjb3VudHMuZ29vZ2xlLmNvbS9vL29hdXRoMi9hdXRoIiwKICAidG9rZW5fdXJpIjogImh0dHBzOi8vb2F1dGgyLmdvb2dsZWFwaXMuY29tL3Rva2VuIiwKICAiYXV0aF9wcm92aWRlcl94NTA5X2NlcnRfdXJsIjogImh0dHBzOi8vd3d3Lmdvb2dsZWFwaXMuY29tL29hdXRoMi92MS9jZXJ0cyIsCiAgImNsaWVudF94NTA5X2NlcnRfdXJsIjogImh0dHBzOi8vd3d3Lmdvb2dsZWFwaXMuY29tL3JvYm90L3YxL21ldGFkYXRhL3g1MDkvZmlyZWJhc2UtYWRtaW5zZGstZmJzdmMlNDBqdXNvdXItcWF0YXIuaWFtLmdzZXJ2aWNlYWNjb3VudC5jb20iLAogICJ1bml2ZXJzZV9kb21haW4iOiAiZ29vZ2xlYXBpcy5jb20iCn0K';
+const FB_SA_B64 = 'ewogICJ0eXBlIjogInNlcnZpY2VfYWNjb3VudCIsCiAgInByb2plY3RfaWQiOiAic2Fzby1pbnNwZWN0aW9uIiwKICAicHJpdmF0ZV9rZXlfaWQiOiAiNDNkOGE1YzQ2MzczY2Y3YzVkNzUzYTlhMTQ0NDU4NjYzYTYwN2FkMyIsCiAgInByaXZhdGVfa2V5IjogIi0tLS0tQkVHSU4gUFJJVkFURSBLRVktLS0tLVxuTUlJRXZ3SUJBREFOQmdrcWhraUc5dzBCQVFFRkFBU0NCS2t3Z2dTbEFnRUFBb0lCQVFDOVVkS2RDTVgrNTBzWVxuMThRMEZmLzBuK2l3ZkhSK2JvK2tVTTBiR0p2U0FMMXg1K0lDcFYwQWpXR2gwT1NIME1WaldlcldQY1VGMmpXY1xuTklLZjNDSUFFa2p6NDgrTkcrR1pzM2pmRWIrTDA3VzNLWDJxTVRseGJoT1krQnpmUXVRTlJOV1FVdUt0YXJSTVxuRU4yL005ZkpmMmVVd2xxNHRaZkRUb0tsbWhFSnp2bnJ5YmRnajBsbndWTHpYOTJ5b1F6R0lnQjZMdWMwV203MVxualNTSlh5ekV6ZTNCWTVBUjhrQjNicEdyamtaWHozVTZDVU1TSHFubXo2UEZyR2ZqRjVXK2tpSjhkWjdsT0FUQlxuaVBTZ2J5YmNFSWRlTkhPS3labWJQYmpmbmdmU0ZYUVZvTlBNdUN0V3lxQXFLUnk2NExNNm1lNjR1QzZUbmdyQlxuVHJxQWp5U0pBZ01CQUFFQ2dnRUFBbEJEQ1gvN1VtNS9aby94Y2YwQVZod1Rwdjk0V1hpdXFQQ0RWeVROZDZzaVxuWllkU3hkdEJPQkhpT3V6ZmRCRHZMcFFCV0ltajlCcTY2N3doQ2dUUnhnd3pKOGJWaVJrSmdGdzIrb3ZnR2p4MVxudEtXdFIxU0hhZzFSTUQzODlWWC9EVEgxaGFoYnBJaWdxQ3JQR09od1owSVhNUlJRY1VBbjJQOUhQYkNVcTNqZVxuaDVIOE42STJaUGc4RjUzWFRST1hrUlQ2U2JzZ1Q0a3cwQ0kyN2RNNTF1RGNrRnJpRmNoOVkwSEJJdUw3NnFzd1xuWXRKUEFTZFFicUhOdnR2VlNwbUpZYUduZzJDKzNzMUlpTG1JaVNkSDZmSGdwYnhDTS9lZTAvSXlUMXBTV1V5Q1xuOGVQY0MyS0dUMm9PbGZacFQ5cDFSRWNiaEVGSzZQT05QVnk3Mmwvd2NRS0JnUURnTWZqaTZNUFBTK1pKYjRQRlxuT0ovdkUrYThnSGloU1liaWFuY2xqMjB2bk55THJoNkVKR0VKUThncnBrdVFDd1NGdzBCNDljcG9RNzVHdm5Va1xuRVpJVG1EcEg4YmNzc3dUanBadW1EMW9LK3F6SHhpTHJkaTR2Q2V0a1YvR0hibExma1lBMVdjQXc4ek55VWFweVxuQ0t2QUtrY3RTRmlaZndTbG9jM0dqN3NsTVFLQmdRRFlMVWppK1ZzSDczWjh3YkdIVFQ5Y3NRNyszVUFtSStJdVxuYkNhalE1TTlhWkViWFFHS0l3RTlDVlN1bmJJRGFDRUdFMjVEb1Qza3QwQVNURVp3dGZkNFJFeUtMZlpzNkJ5UlxuQml0UTB4R21za1NYelNrVjVLTFZiZlBVNU05UnBHbi93QldjcHlFbWoyelRUR2l1Mk14WWIvcVpEQkJxaDJmb1xuY212b011YisyUUtCZ1FEZlNRWGZRQUdjbUxRZldWLzhjWHZnQ1lzWkhENklMQW1ad0gwdnZGdjdPcGZ3eVpaOFxuOXhwcHRzZEtxZEhDQVNjYzdheHRqQ1p0bDJLUFpLcVlKS08rdmpMMWFraUx6VFBHWWk3VndaNWxKdW9rQVRMUVxuSGFDN21uNkZMbzFQMjlIUDlrS2hYK1RwRzU2V2NiMTIyeW5yTm5BektrV0xncFNuUGJJSzJ5V0JVUUtCZ1FDNFxubCtLM1BpcEhXbW1aR21TWG5wVE9kN3JRVXVsbUtCb0pmZng0U1VtL2xSZDlnQ3ZDWXlXNWt2QW1zeTNBenZmMFxuRWorRHJIb0hoWnRHaEs5WnEyaUgzL3BqdTkvREcyalpSYVZUUFFqRGlWSWROZWt4Y3F6QkIwVEF0Q2w4RTZNWFxuNmxRS0VvU3lRcUt3dzN4WVlYUU15SUg2a2x5cU9ybTF1WTcvRmdnOThRS0JnUUN4Q0twb1ZVYmx2bHNic2l4Q1xuQnRvdnhUdHREODhPdHRQbUpDdm9EZlZVbjNWMk9RK21nbXRDODdHK0NCb0FLZ2xlWGh4b2VMZWVYNTY0eldjWFxueGZNMWlvWXZneE5SYUUyWk1GaThVT0dTK0txQXNKcWVqZUd0THpZU0xYSytTeWszSG9tZVRIbmZGRFI1M3g1dFxuOEpsOG9qSVBjZnM4UWlwekI2NGFTMlRaVEE9PVxuLS0tLS1FTkQgUFJJVkFURSBLRVktLS0tLVxuIiwKICAiY2xpZW50X2VtYWlsIjogImZpcmViYXNlLWFkbWluc2RrLWZic3ZjQHNhc28taW5zcGVjdGlvbi5pYW0uZ3NlcnZpY2VhY2NvdW50LmNvbSIsCiAgImNsaWVudF9pZCI6ICIxMTI4MDk2Njg5MDcyNjMzMDA1NjQiLAogICJhdXRoX3VyaSI6ICJodHRwczovL2FjY291bnRzLmdvb2dsZS5jb20vby9vYXV0aDIvYXV0aCIsCiAgInRva2VuX3VyaSI6ICJodHRwczovL29hdXRoMi5nb29nbGVhcGlzLmNvbS90b2tlbiIsCiAgImF1dGhfcHJvdmlkZXJfeDUwOV9jZXJ0X3VybCI6ICJodHRwczovL3d3dy5nb29nbGVhcGlzLmNvbS9vYXV0aDIvdjEvY2VydHMiLAogICJjbGllbnRfeDUwOV9jZXJ0X3VybCI6ICJodHRwczovL3d3dy5nb29nbGVhcGlzLmNvbS9yb2JvdC92MS9tZXRhZGF0YS94NTA5L2ZpcmViYXNlLWFkbWluc2RrLWZic3ZjJTQwc2Fzby1pbnNwZWN0aW9uLmlhbS5nc2VydmljZWFjY291bnQuY29tIiwKICAidW5pdmVyc2VfZG9tYWluIjogImdvb2dsZWFwaXMuY29tIgp9Cg==';
+const RTDB_URL = 'https://saso-inspection-default-rtdb.firebaseio.com';
 
 if (!getApps().length) {
   let sa;
@@ -13,13 +14,13 @@ if (!getApps().length) {
   } else {
     sa = JSON.parse(Buffer.from(FB_SA_B64, 'base64').toString('utf8'));
   }
-  initializeApp({ credential: cert(sa) });
+  initializeApp({ credential: cert(sa), databaseURL: RTDB_URL });
 }
-const db = getFirestore();
+const rtdb = getDatabase();
 
-const appsDoc = db.doc('halyg_store/apps');
-const visitorsDoc = db.doc('halyg_store/visitors');
-const settingsRef = db.doc('halyg_config/settings');
+const appsRef = rtdb.ref('halyg/apps');
+const visitorsRef = rtdb.ref('halyg/visitors');
+const settingsRef = rtdb.ref('halyg/settings');
 
 const CACHE_TTL = 60000;
 const _cache = {};
@@ -34,32 +35,32 @@ function clearCache(prefix) {
 
 async function loadApps() {
   return cached('store.apps', CACHE_TTL, async () => {
-    const doc = await appsDoc.get();
-    return doc.exists ? doc.data() : {};
+    const snap = await appsRef.get();
+    return snap.val() || {};
   });
 }
 
 async function loadVisitors() {
   return cached('store.visitors', CACHE_TTL, async () => {
-    const doc = await visitorsDoc.get();
-    return doc.exists ? doc.data() : {};
+    const snap = await visitorsRef.get();
+    return snap.val() || {};
   });
 }
 
 async function saveApp(nationalId, data) {
-  await appsDoc.set({ [nationalId]: data }, { merge: true });
+  await appsRef.child(nationalId).set(data);
   clearCache('store.apps');
   clearCache('admin.');
 }
 
 async function deleteAppEntry(nationalId) {
-  await appsDoc.update({ [nationalId]: FieldValue.delete() });
+  await appsRef.child(nationalId).remove();
   clearCache('store.apps');
   clearCache('admin.');
 }
 
 async function saveVisitor(sessionId, data) {
-  await visitorsDoc.set({ [sessionId]: data }, { merge: true });
+  await visitorsRef.child(sessionId).set(data);
   clearCache('store.visitors');
   clearCache('admin.');
 }
@@ -78,9 +79,9 @@ function isAdminReq(req) {
 
 async function getSettings() {
   return cached('store.settings', CACHE_TTL, async () => {
-    const doc = await settingsRef.get();
+    const snap = await settingsRef.get();
     const defaults = { whatsappLink: '', totalVisitors: 0, appIdCounter: 10000, visitorIdCounter: 120000 };
-    return doc.exists ? { ...defaults, ...doc.data() } : { ...defaults };
+    return snap.val() ? { ...defaults, ...snap.val() } : { ...defaults };
   });
 }
 
@@ -90,7 +91,7 @@ async function getOrCreateApp(nationalId) {
 
   const settings = await getSettings();
   const newId = (settings.appIdCounter || 10000) + 1;
-  await settingsRef.set({ appIdCounter: newId }, { merge: true });
+  await settingsRef.update({ appIdCounter: newId });
   clearCache('store.settings');
 
   const app = {
@@ -117,7 +118,9 @@ async function getOrCreateVisitor(sessionId) {
   const allVisitors = await loadVisitors();
   if (allVisitors[sessionId]) return { ...allVisitors[sessionId] };
 
-  await settingsRef.set({ totalVisitors: FieldValue.increment(1) }, { merge: true });
+  const settings = await getSettings();
+  const newTotal = (settings.totalVisitors || 0) + 1;
+  await settingsRef.update({ totalVisitors: newTotal });
   clearCache('store.settings');
 
   const visitor = {
@@ -343,7 +346,7 @@ async function executeProcedure(name, input, isAdmin) {
     }
     case 'admin.updateWhatsAppLink': {
       if (!isAdmin) throw new Error('unauthorized');
-      await settingsRef.set({ whatsappLink: input.link || '' }, { merge: true });
+      await settingsRef.update({ whatsappLink: input.link || '' });
       clearCache('store.settings');
       return { success: true };
     }
@@ -429,7 +432,7 @@ async function executeProcedure(name, input, isAdmin) {
         }
       }
       if (Object.keys(updates).length > 0) {
-        await appsDoc.set(updates, { merge: true });
+        await appsRef.update(updates);
         clearCache('store.apps');
         clearCache('admin.');
       }
@@ -472,12 +475,12 @@ async function executeProcedure(name, input, isAdmin) {
       let deletedCount = 0;
       for (const [nid, app] of Object.entries(allApps)) {
         if (app.updatedAt < cutoff) {
-          updates[nid] = FieldValue.delete();
+          updates[nid] = null;
           deletedCount++;
         }
       }
       if (deletedCount > 0) {
-        await appsDoc.update(updates);
+        await appsRef.update(updates);
         clearCache('store.apps');
         clearCache('admin.');
       }
@@ -487,14 +490,14 @@ async function executeProcedure(name, input, isAdmin) {
       if (!isAdmin) throw new Error('unauthorized');
       const allApps = await loadApps();
       const count = Object.keys(allApps).length;
-      await appsDoc.set({});
+      await appsRef.set(null);
       clearCache('store.apps');
       clearCache('admin.');
       return { success: true, deletedCount: count };
     }
     case 'admin.resetTotalVisitors': {
       if (!isAdmin) throw new Error('unauthorized');
-      await settingsRef.set({ totalVisitors: 0 }, { merge: true });
+      await settingsRef.update({ totalVisitors: 0 });
       clearCache('store.settings');
       return { success: true };
     }
