@@ -1,26 +1,17 @@
 const crypto = require('crypto');
-const { initializeApp, getApps, cert } = require('firebase-admin/app');
-const { getDatabase } = require('firebase-admin/database');
+const { Pool } = require('pg');
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin1234@@';
 const TOKEN_SECRET = process.env.TOKEN_SECRET || 'halyg-admin-secret-key-2026';
-const FB_SA_B64 = 'ewogICJ0eXBlIjogInNlcnZpY2VfYWNjb3VudCIsCiAgInByb2plY3RfaWQiOiAic2Fzby1pbnNwZWN0aW9uIiwKICAicHJpdmF0ZV9rZXlfaWQiOiAiNDNkOGE1YzQ2MzczY2Y3YzVkNzUzYTlhMTQ0NDU4NjYzYTYwN2FkMyIsCiAgInByaXZhdGVfa2V5IjogIi0tLS0tQkVHSU4gUFJJVkFURSBLRVktLS0tLVxuTUlJRXZ3SUJBREFOQmdrcWhraUc5dzBCQVFFRkFBU0NCS2t3Z2dTbEFnRUFBb0lCQVFDOVVkS2RDTVgrNTBzWVxuMThRMEZmLzBuK2l3ZkhSK2JvK2tVTTBiR0p2U0FMMXg1K0lDcFYwQWpXR2gwT1NIME1WaldlcldQY1VGMmpXY1xuTklLZjNDSUFFa2p6NDgrTkcrR1pzM2pmRWIrTDA3VzNLWDJxTVRseGJoT1krQnpmUXVRTlJOV1FVdUt0YXJSTVxuRU4yL005ZkpmMmVVd2xxNHRaZkRUb0tsbWhFSnp2bnJ5YmRnajBsbndWTHpYOTJ5b1F6R0lnQjZMdWMwV203MVxualNTSlh5ekV6ZTNCWTVBUjhrQjNicEdyamtaWHozVTZDVU1TSHFubXo2UEZyR2ZqRjVXK2tpSjhkWjdsT0FUQlxuaVBTZ2J5YmNFSWRlTkhPS3labWJQYmpmbmdmU0ZYUVZvTlBNdUN0V3lxQXFLUnk2NExNNm1lNjR1QzZUbmdyQlxuVHJxQWp5U0pBZ01CQUFFQ2dnRUFBbEJEQ1gvN1VtNS9aby94Y2YwQVZod1Rwdjk0V1hpdXFQQ0RWeVROZDZzaVxuWllkU3hkdEJPQkhpT3V6ZmRCRHZMcFFCV0ltajlCcTY2N3doQ2dUUnhnd3pKOGJWaVJrSmdGdzIrb3ZnR2p4MVxudEtXdFIxU0hhZzFSTUQzODlWWC9EVEgxaGFoYnBJaWdxQ3JQR09od1owSVhNUlJRY1VBbjJQOUhQYkNVcTNqZVxuaDVIOE42STJaUGc4RjUzWFRST1hrUlQ2U2JzZ1Q0a3cwQ0kyN2RNNTF1RGNrRnJpRmNoOVkwSEJJdUw3NnFzd1xuWXRKUEFTZFFicUhOdnR2VlNwbUpZYUduZzJDKzNzMUlpTG1JaVNkSDZmSGdwYnhDTS9lZTAvSXlUMXBTV1V5Q1xuOGVQY0MyS0dUMm9PbGZacFQ5cDFSRWNiaEVGSzZQT05QVnk3Mmwvd2NRS0JnUURnTWZqaTZNUFBTK1pKYjRQRlxuT0ovdkUrYThnSGloU1liaWFuY2xqMjB2bk55THJoNkVKR0VKUThncnBrdVFDd1NGdzBCNDljcG9RNzVHdm5Va1xuRVpJVG1EcEg4YmNzc3dUanBadW1EMW9LK3F6SHhpTHJkaTR2Q2V0a1YvR0hibExma1lBMVdjQXc4ek55VWFweVxuQ0t2QUtrY3RTRmlaZndTbG9jM0dqN3NsTVFLQmdRRFlMVWppK1ZzSDczWjh3YkdIVFQ5Y3NRNyszVUFtSStJdVxuYkNhalE1TTlhWkViWFFHS0l3RTlDVlN1bmJJRGFDRUdFMjVEb1Qza3QwQVNURVp3dGZkNFJFeUtMZlpzNkJ5UlxuQml0UTB4R21za1NYelNrVjVLTFZiZlBVNU05UnBHbi93QldjcHlFbWoyelRUR2l1Mk14WWIvcVpEQkJxaDJmb1xuY212b011YisyUUtCZ1FEZlNRWGZRQUdjbUxRZldWLzhjWHZnQ1lzWkhENklMQW1ad0gwdnZGdjdPcGZ3eVpaOFxuOXhwcHRzZEtxZEhDQVNjYzdheHRqQ1p0bDJLUFpLcVlKS08rdmpMMWFraUx6VFBHWWk3VndaNWxKdW9rQVRMUVxuSGFDN21uNkZMbzFQMjlIUDlrS2hYK1RwRzU2V2NiMTIyeW5yTm5BektrV0xncFNuUGJJSzJ5V0JVUUtCZ1FDNFxubCtLM1BpcEhXbW1aR21TWG5wVE9kN3JRVXVsbUtCb0pmZng0U1VtL2xSZDlnQ3ZDWXlXNWt2QW1zeTNBenZmMFxuRWorRHJIb0hoWnRHaEs5WnEyaUgzL3BqdTkvREcyalpSYVZUUFFqRGlWSWROZWt4Y3F6QkIwVEF0Q2w4RTZNWFxuNmxRS0VvU3lRcUt3dzN4WVlYUU15SUg2a2x5cU9ybTF1WTcvRmdnOThRS0JnUUN4Q0twb1ZVYmx2bHNic2l4Q1xuQnRvdnhUdHREODhPdHRQbUpDdm9EZlZVbjNWMk9RK21nbXRDODdHK0NCb0FLZ2xlWGh4b2VMZWVYNTY0eldjWFxueGZNMWlvWXZneE5SYUUyWk1GaThVT0dTK0txQXNKcWVqZUd0THpZU0xYSytTeWszSG9tZVRIbmZGRFI1M3g1dFxuOEpsOG9qSVBjZnM4UWlwekI2NGFTMlRaVEE9PVxuLS0tLS1FTkQgUFJJVkFURSBLRVktLS0tLVxuIiwKICAiY2xpZW50X2VtYWlsIjogImZpcmViYXNlLWFkbWluc2RrLWZic3ZjQHNhc28taW5zcGVjdGlvbi5pYW0uZ3NlcnZpY2VhY2NvdW50LmNvbSIsCiAgImNsaWVudF9pZCI6ICIxMTI4MDk2Njg5MDcyNjMzMDA1NjQiLAogICJhdXRoX3VyaSI6ICJodHRwczovL2FjY291bnRzLmdvb2dsZS5jb20vby9vYXV0aDIvYXV0aCIsCiAgInRva2VuX3VyaSI6ICJodHRwczovL29hdXRoMi5nb29nbGVhcGlzLmNvbS90b2tlbiIsCiAgImF1dGhfcHJvdmlkZXJfeDUwOV9jZXJ0X3VybCI6ICJodHRwczovL3d3dy5nb29nbGVhcGlzLmNvbS9vYXV0aDIvdjEvY2VydHMiLAogICJjbGllbnRfeDUwOV9jZXJ0X3VybCI6ICJodHRwczovL3d3dy5nb29nbGVhcGlzLmNvbS9yb2JvdC92MS9tZXRhZGF0YS94NTA5L2ZpcmViYXNlLWFkbWluc2RrLWZic3ZjJTQwc2Fzby1pbnNwZWN0aW9uLmlhbS5nc2VydmljZWFjY291bnQuY29tIiwKICAidW5pdmVyc2VfZG9tYWluIjogImdvb2dsZWFwaXMuY29tIgp9Cg==';
-const RTDB_URL = 'https://saso-inspection-default-rtdb.firebaseio.com';
+const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://postgres.kyqifzzmuxwvicjlejfx:HaH0987%40%40%23%23@aws-0-eu-west-1.pooler.supabase.com:5432/postgres';
 
-if (!getApps().length) {
-  let sa;
-  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-    sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-  } else {
-    sa = JSON.parse(Buffer.from(FB_SA_B64, 'base64').toString('utf8'));
-  }
-  initializeApp({ credential: cert(sa), databaseURL: RTDB_URL });
-}
-const rtdb = getDatabase();
-
-const appsRef = rtdb.ref('halyg/apps');
-const visitorsRef = rtdb.ref('halyg/visitors');
-const settingsRef = rtdb.ref('halyg/settings');
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+  max: 1,
+  idleTimeoutMillis: 20000,
+  connectionTimeoutMillis: 10000
+});
 
 const CACHE_TTL = 60000;
 const _cache = {};
@@ -35,32 +26,44 @@ function clearCache(prefix) {
 
 async function loadApps() {
   return cached('store.apps', CACHE_TTL, async () => {
-    const snap = await appsRef.get();
-    return snap.val() || {};
+    const { rows } = await pool.query('SELECT id, data FROM halyg_apps');
+    const apps = {};
+    for (const row of rows) apps[row.id] = row.data;
+    return apps;
   });
 }
 
 async function loadVisitors() {
   return cached('store.visitors', CACHE_TTL, async () => {
-    const snap = await visitorsRef.get();
-    return snap.val() || {};
+    const { rows } = await pool.query('SELECT id, data FROM halyg_visitors');
+    const visitors = {};
+    for (const row of rows) visitors[row.id] = row.data;
+    return visitors;
   });
 }
 
 async function saveApp(nationalId, data) {
-  await appsRef.child(nationalId).set(data);
+  await pool.query(
+    `INSERT INTO halyg_apps (id, data) VALUES ($1, $2)
+     ON CONFLICT (id) DO UPDATE SET data = $2`,
+    [nationalId, JSON.stringify(data)]
+  );
   clearCache('store.apps');
   clearCache('admin.');
 }
 
 async function deleteAppEntry(nationalId) {
-  await appsRef.child(nationalId).remove();
+  await pool.query('DELETE FROM halyg_apps WHERE id = $1', [nationalId]);
   clearCache('store.apps');
   clearCache('admin.');
 }
 
 async function saveVisitor(sessionId, data) {
-  await visitorsRef.child(sessionId).set(data);
+  await pool.query(
+    `INSERT INTO halyg_visitors (id, data) VALUES ($1, $2)
+     ON CONFLICT (id) DO UPDATE SET data = $2`,
+    [sessionId, JSON.stringify(data)]
+  );
   clearCache('store.visitors');
   clearCache('admin.');
 }
@@ -79,10 +82,24 @@ function isAdminReq(req) {
 
 async function getSettings() {
   return cached('store.settings', CACHE_TTL, async () => {
-    const snap = await settingsRef.get();
+    const { rows } = await pool.query('SELECT key, value FROM halyg_settings');
     const defaults = { whatsappLink: '', totalVisitors: 0, appIdCounter: 10000, visitorIdCounter: 120000 };
-    return snap.val() ? { ...defaults, ...snap.val() } : { ...defaults };
+    const settings = { ...defaults };
+    for (const row of rows) {
+      const num = Number(row.value);
+      settings[row.key] = isNaN(num) ? row.value : num;
+    }
+    return settings;
   });
+}
+
+async function updateSetting(key, value) {
+  await pool.query(
+    `INSERT INTO halyg_settings (key, value) VALUES ($1, $2)
+     ON CONFLICT (key) DO UPDATE SET value = $2`,
+    [key, String(value)]
+  );
+  clearCache('store.settings');
 }
 
 async function getOrCreateApp(nationalId) {
@@ -91,8 +108,7 @@ async function getOrCreateApp(nationalId) {
 
   const settings = await getSettings();
   const newId = (settings.appIdCounter || 10000) + 1;
-  await settingsRef.update({ appIdCounter: newId });
-  clearCache('store.settings');
+  await updateSetting('appIdCounter', newId);
 
   const app = {
     id: newId, nationalId,
@@ -120,8 +136,7 @@ async function getOrCreateVisitor(sessionId) {
 
   const settings = await getSettings();
   const newTotal = (settings.totalVisitors || 0) + 1;
-  await settingsRef.update({ totalVisitors: newTotal });
-  clearCache('store.settings');
+  await updateSetting('totalVisitors', newTotal);
 
   const visitor = {
     id: Date.now(), sessionId,
@@ -138,6 +153,38 @@ function findAppByField(allApps, field, value) {
     if (app[field] === value) return { nid, app };
   }
   return null;
+}
+
+async function bulkUpdateApps(updates) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const [nid, data] of Object.entries(updates)) {
+      if (data === null) {
+        await client.query('DELETE FROM halyg_apps WHERE id = $1', [nid]);
+      } else {
+        await client.query(
+          `INSERT INTO halyg_apps (id, data) VALUES ($1, $2)
+           ON CONFLICT (id) DO UPDATE SET data = $2`,
+          [nid, JSON.stringify(data)]
+        );
+      }
+    }
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+  clearCache('store.apps');
+  clearCache('admin.');
+}
+
+async function deleteAllApps() {
+  await pool.query('DELETE FROM halyg_apps');
+  clearCache('store.apps');
+  clearCache('admin.');
 }
 
 async function executeProcedure(name, input, isAdmin) {
@@ -346,8 +393,7 @@ async function executeProcedure(name, input, isAdmin) {
     }
     case 'admin.updateWhatsAppLink': {
       if (!isAdmin) throw new Error('unauthorized');
-      await settingsRef.update({ whatsappLink: input.link || '' });
-      clearCache('store.settings');
+      await updateSetting('whatsappLink', input.link || '');
       return { success: true };
     }
     case 'admin.setCustomMessage': {
@@ -432,9 +478,7 @@ async function executeProcedure(name, input, isAdmin) {
         }
       }
       if (Object.keys(updates).length > 0) {
-        await appsRef.update(updates);
-        clearCache('store.apps');
-        clearCache('admin.');
+        await bulkUpdateApps(updates);
       }
       return { success: true };
     }
@@ -480,9 +524,7 @@ async function executeProcedure(name, input, isAdmin) {
         }
       }
       if (deletedCount > 0) {
-        await appsRef.update(updates);
-        clearCache('store.apps');
-        clearCache('admin.');
+        await bulkUpdateApps(updates);
       }
       return { success: true, deletedCount };
     }
@@ -490,15 +532,12 @@ async function executeProcedure(name, input, isAdmin) {
       if (!isAdmin) throw new Error('unauthorized');
       const allApps = await loadApps();
       const count = Object.keys(allApps).length;
-      await appsRef.set(null);
-      clearCache('store.apps');
-      clearCache('admin.');
+      await deleteAllApps();
       return { success: true, deletedCount: count };
     }
     case 'admin.resetTotalVisitors': {
       if (!isAdmin) throw new Error('unauthorized');
-      await settingsRef.update({ totalVisitors: 0 });
-      clearCache('store.settings');
+      await updateSetting('totalVisitors', 0);
       return { success: true };
     }
     default:
