@@ -13,7 +13,7 @@ const pool = new Pool({
   connectionTimeoutMillis: 10000
 });
 
-const CACHE_TTL = 60000;
+const CACHE_TTL = 0;
 const _cache = {};
 function cached(key, ttlMs, fn) {
   const entry = _cache[key];
